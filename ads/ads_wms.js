@@ -39,7 +39,7 @@ var map = new ol.Map({
     view: new ol.View2D({
         projection: projection,
         resolutions: resolutions,
-        center: [315000, 468000],
+        center: [413674, 289141],
         zoom: 0
     })
 });
