@@ -20,7 +20,7 @@ var map = new ol.Map({
             source: new ol.source.TileWMS({
                 url: 'http://t0.ads.astuntechnology.com/astuntechnology/osopen/service?',
                 attributions: [
-                    new ol.Attribution({html: 'OS OpenData, &copy; Ordnance Survey'})
+                    new ol.Attribution({html: 'Astun Data Service &copy; Ordnance Survey.'})
                 ],
                 params: {
                     'LAYERS': 'osopen',
