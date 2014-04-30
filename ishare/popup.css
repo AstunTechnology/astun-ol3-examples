@@ -1,8 +1,8 @@
-#popup div.infoResult {
+.ol-popup div.infoResult {
     min-width: 130px;
 }
 
-#popup div.infoResult p {
+.ol-popup div.infoResult p {
     padding: 0.1em;
     margin: 0;
 }

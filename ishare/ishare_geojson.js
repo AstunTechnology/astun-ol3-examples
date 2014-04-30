@@ -6,27 +6,7 @@
 // Define the URL used to fetch features for a given area of interest
 var url = 'http://national.astuntechnology.com/ishare/web//MapGetImage.aspx?callback=?&Type=jsonp&MapSource=National/AllMaps&RequestType=GeoJSON&ActiveTool=MultiInfo&ActiveLayer=&Layers=nhshospitals&mapid=-1&axuid=1387296513806&ServiceAction=GetMultiInfoFromShape&Shape=POLYGON%28%28150000%2010000%2C%20350000%2010000%2C%20350000%20150000%2C%20150000%20150000%2C%20150000%2010000%29%29';
 
-/**
- * Elements that make up the popup.
- */
-var container = document.getElementById('popup');
-var content = document.getElementById('popup-content');
-var closer = document.getElementById('popup-closer');
-
-/**
- * Add a click handler to hide the popup.
- * @return {boolean} Don't follow the href.
- */
-closer.onclick = function() {
-  container.style.display = 'none';
-  closer.blur();
-  return false;
-};
-
-var popup = new ol.Overlay({
-    element: container,
-    stopEvent: true
-});
+var popup = new ol.Popup();
 map.addOverlay(popup);
 
 map.on('click', function(evt) {
@@ -36,12 +16,9 @@ map.on('click', function(evt) {
     if (feature) {
         var geometry = feature.getGeometry();
         var coord = geometry.getCoordinates();
-        popup.setPosition(coord);
-        content.innerHTML = feature.get('html');
-        popup.getElement().style.display = 'block';
+        popup.show(coord, feature.get('html'));
     } else {
-        content.innerHTML = '';
-        popup.getElement().style.display = 'none';
+        popup.hide();
     }
 });
 
