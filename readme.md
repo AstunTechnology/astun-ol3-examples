@@ -5,5 +5,6 @@ A collection of examples showing how [Astun Technology](http://astuntechnology.c
 You can also view the example thanks to rawgithub.com here:
 
 * [ADS OS Open WMS](http://rawgithub.com/AstunTechnology/astun-ol3-examples/master/ads/ads_wms.html)
+* [iShare GeoJSON](http://rawgithub.com/AstunTechnology/astun-ol3-examples/master/ishare/ishare_geojson.html)
 
 Also see [astun-leaflet-examples](https://github.com/AstunTechnology/astun-leaflet-examples).
