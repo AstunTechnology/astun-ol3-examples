@@ -6,10 +6,25 @@
 // Define the URL used to fetch features for a given area of interest
 var url = 'http://national.astuntechnology.com/ishare/web//MapGetImage.aspx?callback=?&Type=jsonp&MapSource=National/AllMaps&RequestType=GeoJSON&ActiveTool=MultiInfo&ActiveLayer=&Layers=nhshospitals&mapid=-1&axuid=1387296513806&ServiceAction=GetMultiInfoFromShape&Shape=POLYGON%28%28150000%2010000%2C%20350000%2010000%2C%20350000%20150000%2C%20150000%20150000%2C%20150000%2010000%29%29';
 
-var popupEl = document.getElementById('popup');
+/**
+ * Elements that make up the popup.
+ */
+var container = document.getElementById('popup');
+var content = document.getElementById('popup-content');
+var closer = document.getElementById('popup-closer');
+
+/**
+ * Add a click handler to hide the popup.
+ * @return {boolean} Don't follow the href.
+ */
+closer.onclick = function() {
+  container.style.display = 'none';
+  closer.blur();
+  return false;
+};
+
 var popup = new ol.Overlay({
-    element: popupEl,
-    positioning: 'bottom-center',
+    element: container,
     stopEvent: true
 });
 map.addOverlay(popup);
@@ -22,11 +37,11 @@ map.on('click', function(evt) {
         var geometry = feature.getGeometry();
         var coord = geometry.getCoordinates();
         popup.setPosition(coord);
-        popupEl.innerHTML = feature.get('html');
-        popupEl.style.display = 'block';
+        content.innerHTML = feature.get('html');
+        popup.getElement().style.display = 'block';
     } else {
-        popupEl.innerHTML = '';
-        popupEl.style.display = 'none';
+        content.innerHTML = '';
+        popup.getElement().style.display = 'none';
     }
 });
 
@@ -47,7 +62,7 @@ jQuery.getJSON(url, {}, function (data) {
 });
 
 function prepGeoJson(feats) {
-    // Add a crs so that Proj4Leaflet can identify the coordinate system of the
+    // Add a crs so that ol3 can identify the coordinate system of the
     // features
     feats.crs = {
         "properties": {

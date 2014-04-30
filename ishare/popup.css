@@ -1,17 +1,5 @@
-#popup {
-    background-image: url(tail.png);
-    background-repeat: no-repeat;
-    background-position: center bottom;
-    padding-bottom: 15px;
-}
-
 #popup div.infoResult {
-    background-color: white;
-    padding: 0.5em;
-    border: 1px solid #b2b2b2;
-    max-width: 300px;
-    max-height: 300px;
-    overflow: auto;
+    min-width: 130px;
 }
 
 #popup div.infoResult p {
