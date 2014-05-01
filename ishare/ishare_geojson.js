@@ -23,11 +23,11 @@ map.on('click', function(evt) {
 });
 
 reqwest({url: url, type: 'jsonp'}).then(function (data) {
-    // Make a valid GeoJSON object with a crs
-    var feats = prepGeoJson(data[0]);
-    var vectorSource = new ol.source.GeoJSON({object: feats});
+    // Make a valid GeoJSON object
     var vectorLayer = new ol.layer.Vector({
-        source: vectorSource,
+        source: new ol.source.GeoJSON({
+            'object': prepGeoJson(data[0])
+        }),
         style: new ol.style.Style({
             image: new ol.style.Icon(({
                 src: 'marker.png'
@@ -35,7 +35,7 @@ reqwest({url: url, type: 'jsonp'}).then(function (data) {
         })
     });
     map.addLayer(vectorLayer);
-    map.getView().fitExtent(vectorSource.getExtent(), map.getSize());
+    map.getView().fitExtent(vectorLayer.getSource().getExtent(), map.getSize());
 });
 
 function prepGeoJson(feats) {
