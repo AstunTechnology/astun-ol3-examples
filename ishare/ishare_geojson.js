@@ -22,7 +22,7 @@ map.on('click', function(evt) {
     }
 });
 
-jQuery.getJSON(url, {}, function (data) {
+reqwest({url: url, type: 'jsonp'}).then(function (data) {
     // Make a valid GeoJSON object with a crs
     var feats = prepGeoJson(data[0]);
     var vectorSource = new ol.source.GeoJSON({object: feats});
