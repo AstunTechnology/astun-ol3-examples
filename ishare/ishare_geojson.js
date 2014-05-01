@@ -39,14 +39,6 @@ reqwest({url: url, type: 'jsonp'}).then(function (data) {
 });
 
 function prepGeoJson(feats) {
-    // Add a crs so that ol3 can identify the coordinate system of the
-    // features
-    feats.crs = {
-        "properties": {
-            "name": "urn:ogc:def:crs:EPSG::27700"
-        }, 
-        "type": "name"
-    };
     // Correct the geometry which is assumed to be a point.
     for (var i = 0, feat; i < feats.features.length; i++) {
         feat = feats.features[i];
