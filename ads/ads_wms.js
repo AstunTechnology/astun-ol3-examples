@@ -4,8 +4,8 @@ var extent = [-3276800, -3276800, 3276800, 3276800];
 // Fixed resolutions to display the map at
 var resolutions = [1600,800,400,200,100,50,25,10,5,2.5,1,0.5,0.25,0.125,0.0625];
 
-// Basic ol3 Projection definition used by the View2D. Include the extent here
-// and specify the resolutions as a property of the View2D to specify the zoom
+// Basic ol3 Projection definition used by the View. Include the extent here
+// and specify the resolutions as a property of the View to specify the zoom
 // levels that are available to the user.
 var projection = new ol.proj.Projection({
     code: 'EPSG:27700',
@@ -36,7 +36,7 @@ var map = new ol.Map({
             })
         })
     ],
-    view: new ol.View2D({
+    view: new ol.View({
         projection: projection,
         resolutions: resolutions,
         center: [413674, 289141],
