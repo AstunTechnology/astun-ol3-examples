@@ -3,7 +3,7 @@ ol.Popup = function(opt_options) {
     var options = opt_options || {};
 
     this.container = document.createElement('div');
-    this.container.className = 'ol-popup';
+    this.container.className = 'ol-popup ' + options.class;
 
     this.closer = document.createElement('a');
     this.closer.className = 'ol-popup-closer';
@@ -18,6 +18,7 @@ ol.Popup = function(opt_options) {
     }, false);
 
     this.content = document.createElement('div');
+    this.content.className = 'ol-popup-content';
     this.container.appendChild(this.content);
 
     ol.Overlay.call(this, {

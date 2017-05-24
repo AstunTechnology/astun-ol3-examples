@@ -32,7 +32,14 @@
     margin-left: -11px;
 }
 
+.ol-popup-content {
+    min-width: 250px;
+    max-height: 200px;
+    overflow-x: auto;
+}
+
 .ol-popup-closer {
+    color: gray;
     text-decoration: none;
     position: absolute;
     top: 2px;
