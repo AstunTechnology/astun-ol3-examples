@@ -1,16 +1,8 @@
 .ol-popup div.infoResult {
-    min-width: 130px;
-}
-
-.ol-popup div.infoResult p {
-    padding: 0.1em;
-    margin: 0;
+    margin-left: 0.5em;
+    margin-bottom: 0.5em;
 }
 
 .ol-popup-content h3 {
-    margin: 0.25em 0;
-}
-
-.ol-popup.marker {
-    margin-bottom: 30px;
+    border-bottom: 1px solid lightgrey;
 }

@@ -1,121 +1,239 @@
 var liteMap = (function () {
 
-    var map;
+    function getProfile(options, callback) {
 
-    function liteMap(options) {
-
-        var mapSourceUrl = options.iShareUrl + "getdata.aspx?callback=?&type=jsonp&service=MapSource&RequestType=JSON&ms=" + options.mapSource;
-        var overlayWmsUrl = options.iShareUrl + 'getows.ashx?mapsource=' + options.mapSource;
-        var overlayInfoUrl = options.iShareUrl + 'mapgetimage.aspx?callback=?&Type=jsonp&RequestType=GeoJSON&ActiveTool=MultiInfo&ActiveLayer=&ServiceAction=GetMultiInfoFromPoint&MapSource=' + options.mapSource + '&Layers=' + options.layers;
+        var mapSourceUrl = options.iShareUrl + "getdata.aspx?callback=?&type=jsonp&service=MapSource&RequestType=JSON&ms=" + options.profile;
 
         reqwest({
             url: mapSourceUrl,
             type: 'jsonp'
-        }).then(function (data) {
-            var baseUrl = options.iShareUrl + 'getdata.aspx?callback=?&type=jsonp&service=MapSource&RequestType=JSON&ms=' + data.defaultBaseMap;
+        }).then(function (mapSource) {
+            console.log(JSON.stringify(mapSource));
+            var baseUrl = options.iShareUrl + 'getdata.aspx?callback=?&type=jsonp&service=MapSource&RequestType=JSON&ms=' + mapSource.defaultBaseMap;
             reqwest({
                 url: baseUrl,
                 type: 'jsonp'
-            }).then(function (data) {
-                var opts = {
-                    extent: data.bounds,
-                    resolutions: _map(data.baseMapDefinition.scales, scaleToResolution),
-                    copyright: data.baseMapDefinition.copyright,
+            }).then(function (baseMap) {
+                // console.log(JSON.stringify(baseMap));
+                var profile = {
+                    extent: mapSource.bounds,
+                    projection: mapSource.projection,
+                    initialView: mapSource.initialView,
+                    units: mapSource.units,
+                    resolutions: baseMap.baseMapDefinition.scales.map(scaleToResolution),
+                    attribution: baseMap.baseMapDefinition.copyright,
                     basemap: {
-                        url: data.baseMapDefinition.uri.split('|')[0],
-                        layers: [data.baseMapDefinition.name],
-                        format: data.baseMapDefinition.options.format
+                        url: baseMap.baseMapDefinition.uri[0],
+                        layers: [baseMap.baseMapDefinition.name],
+                        format: baseMap.baseMapDefinition.options.format
                     },
+                    layerGroups: mapSource.layerGroups,
                     overlays: {
-                        wmsUrl: overlayWmsUrl,
-                        infoUrl: overlayInfoUrl,
-                        layers: options.layers.split(','),
-                        format: 'image/png'
+                        wmsUrl: options.iShareUrl + 'getows.ashx?mapsource=' + options.profile
                     },
                     view: options.view
                 };
-                ol3Map(opts);
+                callback(null, profile);
             });
         });
 
     }
 
-    function ol3Map(options) {
-
-        // Define British National Grid Proj4js projection (copied from http://epsg.io/27700.js)
-        proj4.defs("EPSG:27700","+proj=tmerc +lat_0=49 +lon_0=-2 +k=0.9996012717 +x_0=400000 +y_0=-100000 +ellps=airy +towgs84=446.448,-125.157,542.06,0.15,0.247,0.842,-20.489 +units=m +no_defs");
-        var projection = ol.proj.get('EPSG:27700');
-        projection.setExtent(options.extent);
-
+    function createOverlay(profile, layerName) {
         var overlaySource = new ol.source.ImageWMS({
-            url: options.overlays.wmsUrl,
+            url: profile.overlays.wmsUrl,
             params: {
-                'LAYERS': options.overlays.layers.join(',')
+                'LAYERS': layerName
             },
-            extent: options.extent
+            extent: profile.extent
         });
+        var overlayLayer = new ol.layer.Image({
+            source: overlaySource,
+            "iShare:layerName": layerName
+        });
+        return overlayLayer;
+    }
 
-        map = new ol.Map({
-            target: 'map',
+    function createMap(profile, target) {
+
+        var proj = profile.projection;
+        proj4.defs(proj.SRS + ':' + proj.SRID, proj.definition);
+        var projection = ol.proj.get('EPSG:27700');
+
+        var map = new ol.Map({
+            target: target,
             layers: [
                 new ol.layer.Tile({
                     source: new ol.source.TileWMS({
-                        url: options.basemap.url,
+                        url: profile.basemap.url,
                         attributions: [
-                            new ol.Attribution({html: options.copyright})
+                            new ol.Attribution({html: profile.attribution})
                         ],
                         params: {
-                            'LAYERS': options.basemap.layers.join(','),
-                            'FORMAT': options.basemap.format
+                            'LAYERS': profile.basemap.layers.join(','),
+                            'FORMAT': profile.basemap.format
                         },
                         tileGrid: new ol.tilegrid.TileGrid({
-                            origin: options.extent.slice(0, 2),
-                            resolutions: options.resolutions
+                            origin: profile.extent.slice(0, 2),
+                            resolutions: profile.resolutions
                         })
                     })
-                }),
-                new ol.layer.Image({
-                    source: overlaySource
                 })
             ],
             view: new ol.View({
                 projection: projection,
-                resolutions: options.resolutions,
-                center: [options.view.easting, options.view.northing],
+                resolutions: profile.resolutions,
+                center: [profile.view.easting, profile.view.northing],
                 zoom: 5
             })
         });
 
-        map.getView().setZoom(nearestZoom(options.view.zoom, map.getSize()[0], options.resolutions));
+        map.getView().setZoom(nearestZoom(profile.view.zoom, map.getSize()[0], profile.resolutions));
 
-        var popup = new ol.Popup();
-        map.addOverlay(popup);
+        return map;
 
-        map.on('singleclick', function(evt) {
-            var url = options.overlays.infoUrl + '&Easting=' + evt.coordinate[0] + '&Northing=' + evt.coordinate[1];
-            if (url) {
-                reqwest({
-                    url: url,
-                    type: 'jsonp'
-                }).then(function (data) {
-                    if (data.length) {
-                        var html = '';
-                        for (var n = 0, l; n < data.length; n++) {
-                            l = data[n];
-                            html += l.properties.htmlHeader;
-                            for (var m = 0, f; m < l.features.length; m++) {
-                                f = l.features[m];
-                                html += f.properties.html;
-                            }
-                            html += l.properties.htmlFooter;
-                        }
-                        popup.show(evt.coordinate, html);
-                    } else {
-                        popup.hide();
-                    }
+    }
+
+    function enableInfoClick(lite) {
+
+        var profile = lite.profile;
+        var map = lite.map;
+
+        if (lite.popup && map.getOverlayById(lite.popup.getId())) {
+            // All good we already have a popup instance
+        } else {
+            lite.popup = new ol.Overlay.Popup({id: 'iShare:info'});
+            map.addOverlay(lite.popup);
+        }
+
+        lite.onInfoClick = function(evt) {
+
+            function displayInfoResults(results) {
+                var reader = new ol.format.WMSGetFeatureInfo()
+                var collections = results.map(function(resp) {
+                    return reader.readFeatures(resp.responseText);
                 });
+                var html = collections.map(function(collection, index) {
+                    // Get a reference to the layer based on the index of the
+                    // response in the results Array
+                    var layer = lite.overlays[index];
+                    var layerDef = getLayerDef(profile.layerGroups, layer.get("iShare:layerName"));
+                    var html = '';
+                    if (layerDef.infoClick) {
+                        var collectionHtml = collection.map(function(feature) {
+                            var html = '<div class="infoResult">';
+                            html += layerDef.fields.map(function(field) {
+                                return '<p><strong>' + field.displayName + '</strong> <span>' + feature.get(field.name) + '</span> </p>';
+                            }).join('\n');
+                            html += '</div>';
+                            return html;
+                        }).join('\n');
+                        if (collectionHtml.length) {
+                            html = '<div class="contentDisplay"><h3>' + layerDef.displayName + '</h3>';
+                            html += collectionHtml;
+                            html += '</div>';
+                        }
+                    }
+                    return html;
+                }).join('\n');
+                if (html.trim().length) {
+                    lite.popup.show(evt.coordinate, html);
+                } else {
+                    lite.popup.hide();
+                }
             }
+
+            // Create an empty Array to store the results of the GetFeatureInfo
+            // requests in
+            var results = Array(lite.overlays.length)
+
+            lite.overlays.forEach(function(layer, index) {
+
+                var wmsInfoOpts = {
+                    'INFO_FORMAT': 'application/vnd.ogc.gml',
+                    'FEATURE_COUNT': 10
+                };
+                // Pick up features within 10 pixels of the click
+                wmsInfoOpts['map.layer[' + layer.get('iShare:layerName') + ']'] = 'TOLERANCE+10+TOLERANCEUNITS+PIXELS';
+
+                var wmsInfoUrl = layer.getSource().getGetFeatureInfoUrl(
+                    evt.coordinate,
+                    evt.map.getView().getResolution(),
+                    evt.map.getView().getProjection(),
+                    wmsInfoOpts
+                );
+
+                reqwest({
+                    url: wmsInfoUrl
+                }).then(function(resp) {
+                    // Store the response in the appropriate index in the
+                    // results Array
+                    results[index] = resp;
+                    // Determine if all results are now present
+                    for (var i = 0; i < results.length; i++) {
+                        if (results[i] == undefined) {
+                            // If we find that one of the results is missing
+                            // simply return and wait until all requests are
+                            // complete and the results Array is full
+                            return;
+                        }
+                    }
+                    // At this point all results are in
+                    displayInfoResults(results);
+                });
+
+            });
+        };
+
+        map.un('singleclick', lite.onInfoClick);
+        map.on('singleclick', lite.onInfoClick);
+
+        return lite;
+
+    }
+
+    /**
+     * Create an OpenLayers map pre-configured with base map, overlays etc.
+     * defined in iShare profile (MapSource) and specified options
+     */
+    function liteMap(options, callback) {
+
+        options.layers = options.layers.split(',');
+
+        var lite = {"type": "LITE"};
+
+        getProfile(options, function(err, profile) {
+            console.log(profile);
+
+            lite.profile = profile;
+
+            // Create basic map
+            var map = createMap(profile, options.target);
+            lite.map = map;
+
+            var visibleLayers = getLayerDefs(profile.layerGroups).filter(function(layerDef) {
+                return layerDef.initiallyVisible || options.layers.indexOf(layerDef.layerName) > -1;
+            });
+
+            lite.overlays = visibleLayers.map(function(layerDef) {
+                var layerName = layerDef.layerName;
+                return createOverlay(lite.profile, layerName);
+            });
+            lite.overlays.forEach(function(layer) {
+                // TODO Ensure layers are added in the correct draw order
+                lite.map.addLayer(layer);
+            });
+
+            // By default add infoOnClick functionality
+            if (!options.functionality || (!options.functionality.hasOwnProperty('infoOnClick') || options.functionality.infoOnClick)) {
+                enableInfoClick(lite);
+            }
+
+            callback(null, lite);
+
         });
+
+
     }
 
     // -- Utility --
@@ -149,19 +267,7 @@ var liteMap = (function () {
     * the zoom levels for the map.
     */
     function nearestZoom(meters, pixels, resolutions) {
-        // To calculate the zoom (level) we need the map width in pixels, then we
-        // convert the resolutions to meters (res * w) and find the closest
-        // resolution then look up it's index in the resolutions array
-        // var resInfo = function (res, idx) {
-        //     var item = {'res': res, 'zoom': idx, 'meters': res * pixels}
-        //     item.diff = Math.abs(item.meters - meters);
-        //     return item;
-        // }
-        // var items = [];
-        // for (var i = 0; i < resolutions.length; i++) {
-        //     items.push(resInfo(resolutions[i], i));
-        // }
-        var items = _map(resolutions, function (res, idx) {
+        var items = resolutions.map(function (res, idx) {
             var item = {'res': res, 'zoom': idx, 'meters': res * pixels}
             item.diff = Math.abs(item.meters - meters);
             return item;
@@ -170,19 +276,39 @@ var liteMap = (function () {
         return nearest[0].zoom;
     }
 
-    function _map(l, f) {
-        var items = [];
-        for (var i = 0; i < l.length; i++) {
-            items.push(f(l[i], i));
+    /**
+     * Returns a flattened list of all layers found in layerGroups
+     */
+    function getLayerDefs(layerGroups) {
+        var layerDefs = [];
+        for (var m = 0, g; m < layerGroups.length; m++) {
+            g = layerGroups[m];
+            for (var n = 0, l; n < g.layers.length; n++) {
+                l = g.layers[n];
+                layerDefs.push(l);
+            }
         }
-        return items;
+        return layerDefs;
+    }
+
+    /**
+     * Returns the layer definition with layerName or null if not found
+     */
+    function getLayerDef(layerGroups, layerName) {
+        try {
+            return getLayerDefs(layerGroups).filter(function(layerDef) {
+                return layerDef.layerName === layerName;
+            })[0];
+        } catch (e) {
+            return null;
+        }
     }
 
     return {
         liteMap: liteMap,
-        getMap: function() {
-            return map;
-        }
+        createMap: createMap,
+        createOverlay: createOverlay,
+        enableInfoClick: enableInfoClick
     };
 
 })();
