@@ -6,3 +6,7 @@
 .ol-popup-content h3 {
     border-bottom: 1px solid lightgrey;
 }
+
+.wait {
+    cursor: wait;
+}

@@ -23,7 +23,8 @@ ol.Popup = function(opt_options) {
 
     ol.Overlay.call(this, {
         element: this.container,
-        stopEvent: true
+        stopEvent: true,
+        id: options.id
     });
 
 };
