@@ -1,20 +1,42 @@
-var liteMap = (function () {
+var iShare = (function () {
 
-    function getProfile(options, callback) {
+    function getProfile(iShareUrl, profileName, callback) {
 
-        var mapSourceUrl = options.iShareUrl + "getdata.aspx?callback=?&type=jsonp&service=MapSource&RequestType=JSON&ms=" + options.profile;
+        var mapSourceUrl = iShareUrl + "getdata.aspx?callback=?&type=jsonp&service=MapSource&RequestType=JSON&ms=" + profileName;
 
         reqwest({
             url: mapSourceUrl,
             type: 'jsonp'
         }).then(function (mapSource) {
             console.log(JSON.stringify(mapSource));
-            var baseUrl = options.iShareUrl + 'getdata.aspx?callback=?&type=jsonp&service=MapSource&RequestType=JSON&ms=' + mapSource.defaultBaseMap;
+
+            var layerGroups = mapSource.layerGroups.map(function(group) {
+                group.layers = group.layers.map(function(layer) {
+                    return {
+                        "layerName": layer.layerName,
+                        "displayName": layer.displayName,
+                        "initiallyVisible": layer.initiallyVisible,
+                        "infoClick": Boolean(layer.infoClick),
+                        "query": layer.query,
+                        "searchField": layer.searchField,
+                        "type": layer.type,
+                        "fields": layer.fields,
+                        "thematic": layer.thematic,
+                        "ows": layer.ows,
+                        "metadata": layer.metadata
+                    };
+                });
+                return group;
+            });
+
+            var baseUrl = iShareUrl + 'getdata.aspx?callback=?&type=jsonp&service=MapSource&RequestType=JSON&ms=' + mapSource.defaultBaseMap;
+
             reqwest({
                 url: baseUrl,
                 type: 'jsonp'
             }).then(function (baseMap) {
                 // console.log(JSON.stringify(baseMap));
+
                 var profile = {
                     extent: mapSource.bounds,
                     projection: mapSource.projection,
@@ -27,30 +49,32 @@ var liteMap = (function () {
                         layers: [baseMap.baseMapDefinition.name],
                         format: baseMap.baseMapDefinition.options.format
                     },
-                    layerGroups: mapSource.layerGroups,
+                    layerGroups: layerGroups,
                     overlays: {
-                        wmsUrl: options.iShareUrl + 'getows.ashx?mapsource=' + options.profile
-                    },
-                    view: options.view
+                        wmsUrl: iShareUrl + 'getows.ashx?mapsource=' + profileName
+                    }
                 };
+
                 callback(null, profile);
+
             });
         });
 
     }
 
     function createGroup(profile, guid) {
-        var groupDef = getGroupDef(profile.layerGroups, guid);
-        console.log(groupDef);
+        var groupConfig = profileUtil.getGroupConfig(profile.layerGroups, guid);
+        console.log(groupConfig);
         var group = new ol.layer.Group({
-            'title': groupDef.displayName,
-            'iShare:guid': groupDef.guid
+            'iShare:guid': groupConfig.guid,
+            "iShare:config": {},
+            'title': groupConfig.displayName
         });
         return group;
     }
 
     function createOverlay(profile, layerName) {
-        var layerDef = getLayerDef(profile.layerGroups, layerName);
+        var layerConfig = profileUtil.getLayerConfig(profile.layerGroups, layerName);
         var source = new ol.source.ImageWMS({
             "url": profile.overlays.wmsUrl,
             "params": {
@@ -60,14 +84,9 @@ var liteMap = (function () {
         });
         var layer = new ol.layer.Image({
             "source": source,
-            // TODO Only add an id and config custom settings, make the layer
-            // definition nice in getProfile (infoClick:Boolean, remove old
-            // properties etc.)
-            "iShare:id": layerName,
-            "iShare:config": layerDef,
-            "iShare:type": "overlay",
-            "iShare:infoClick": Boolean(layerDef.infoClick),
-            "title": layerDef.displayName
+            "iShare:layerName": layerName,
+            "iShare:config": layerConfig,
+            "title": layerConfig.displayName
         });
         return layer;
     }
@@ -146,19 +165,19 @@ var liteMap = (function () {
                     // Get a reference to the layer based on the index of the
                     // response in the results Array
                     var layer = infoLayers[index];
-                    var layerDef = getLayerDef(profile.layerGroups, layer.get("iShare:id"));
+                    var layerConfig = layer.get("iShare:config");
                     var html = '';
-                    if (layerDef.infoClick) {
+                    if (layerConfig.infoClick) {
                         var collectionHtml = collection.map(function(feature) {
                             var html = '<div class="infoResult">';
-                            html += layerDef.fields.map(function(field) {
+                            html += layerConfig.fields.map(function(field) {
                                 return '<p><strong>' + field.displayName + '</strong> <span>' + feature.get(field.name) + '</span> </p>';
                             }).join('\n');
                             html += '</div>';
                             return html;
                         }).join('\n');
                         if (collectionHtml.length) {
-                            html = '<div class="contentDisplay"><h3>' + layerDef.displayName + '</h3>';
+                            html = '<div class="contentDisplay"><h3>' + layerConfig.displayName + '</h3>';
                             html += collectionHtml;
                             html += '</div>';
                         }
@@ -174,13 +193,9 @@ var liteMap = (function () {
 
             }
 
-            // TODO Get a list of layers from the map itself
             var infoLayers = olUtil.getAllLayers(evt.map.getLayerGroup()).filter(function(layer) {
-                return layer.get('iShare:type') === 'overlay' && layer.get('iShare:infoClick');
-            });
-            console.log(infoLayers);
-            infoLayers.forEach(function(layer) {
-                console.log(layer.get('title'));
+                var layerConfig = layer.get("iShare:config");
+                return layer.getVisible() && layerConfig && layerConfig.infoClick;
             });
 
             // Create an empty Array to store the results of the GetFeatureInfo
@@ -189,12 +204,14 @@ var liteMap = (function () {
 
             infoLayers.forEach(function(layer, index) {
 
+                var layerName = layer.get("iShare:layerName");
+
                 var wmsInfoOpts = {
-                    'INFO_FORMAT': 'application/vnd.ogc.gml',
+                    "INFO_FORMAT": "application/vnd.ogc.gml",
                     'FEATURE_COUNT': 10
                 };
                 // Pick up features within 10 pixels of the click
-                wmsInfoOpts['map.layer[' + layer.get('iShare:id') + ']'] = 'TOLERANCE+10+TOLERANCEUNITS+PIXELS';
+                wmsInfoOpts["map.layer[" + layerName + "]"] = "TOLERANCE+10+TOLERANCEUNITS+PIXELS";
 
                 var wmsInfoUrl = layer.getSource().getGetFeatureInfoUrl(
                     evt.coordinate,
@@ -211,7 +228,7 @@ var liteMap = (function () {
                     results[index] = resp;
                     // Determine if all results are now present
                     for (var i = 0; i < results.length; i++) {
-                        if (results[i] == undefined) {
+                        if (results[i] === null) {
                             // If we find that one of the results is missing
                             // simply return and wait until all requests are
                             // complete and the results Array is full
@@ -242,18 +259,18 @@ var liteMap = (function () {
 
         var lite = {"type": "LITE"};
 
-        getProfile(options, function(err, profile) {
+        getProfile(options.iShareUrl, options.profile, function(err, profile) {
             console.log(profile);
+
+            // If we've been passed options.view use it otherwise fallback to
+            // the initialView
+            profile.view = options.view || profile.initialView;
 
             lite.profile = profile;
 
             // Create basic map
             var map = createMap(profile, options.target);
             lite.map = map;
-
-            // var visibleLayers = getLayerDefs(profile.layerGroups).filter(function(layerDef) {
-            //     return layerDef.initiallyVisible || options.layers.indexOf(layerDef.layerName) > -1;
-            // });
 
             // Loop through each group in profile
             // if the group contains a visible layer, create it, add it to the map then create the visible layer(s) and add those to the group
@@ -275,20 +292,6 @@ var liteMap = (function () {
                     }
                 }
             }
-
-            // TODO instead of storing a list against the lite Object look them up from the map itself
-            // lite.overlays = visibleLayers.map(function(layerDef) {
-            //     var layerName = layerDef.layerName;
-            //     return createOverlay(lite.profile, layerName);
-            // });
-
-            // visibleLayers.forEach(function(layerDef) {
-            //     // TODO Ensure groups and layers are added in the correct draw order
-            //     var groupDef = getGroupDefByLayerName(profile.layerGroups, layerDef.layerName);
-            //     var group = olUtil.getGroupByGuid(lite.map.getLayerGroup(), groupDef.guid) || createGroup(lite.profile, groupDef.guid);
-            //     lite.map.addLayer(group);
-            //     group.getLayers().push(layer);
-            // });
 
             // By default add infoOnClick functionality
             if (!options.functionality || (!options.functionality.hasOwnProperty('infoOnClick') || options.functionality.infoOnClick)) {
@@ -342,72 +345,46 @@ var liteMap = (function () {
         return nearest[0].zoom;
     }
 
-    function groupDefContains(layerGroups, groupDef, layerName) {
-        for (var n = 0, l; n < groupDef.layers.length; n++) {
-            l = groupDef.layers[n];
-            if (l.layerName === layerName) {
-                return true;
+    var profileUtil = {
+        getLayerConfigs: function(layerGroups) {
+            /**
+            * Returns a flattened list of all layers found in layerGroups
+            */
+            var layerConfigs = [];
+            for (var m = 0, g; m < layerGroups.length; m++) {
+                g = layerGroups[m];
+                for (var n = 0, l; n < g.layers.length; n++) {
+                    l = g.layers[n];
+                    layerConfigs.push(l);
+                }
+            }
+            return layerConfigs;
+        },
+        getLayerConfig: function(layerGroups, layerName) {
+            /**
+            * Returns the layer definition with layerName or null if not found
+            */
+            try {
+                return profileUtil.getLayerConfigs(layerGroups).filter(function(layerConfig) {
+                    return layerConfig.layerName === layerName;
+                })[0];
+            } catch (e) {
+                return null;
+            }
+        },
+        getGroupConfig: function(layerGroups, guid) {
+            /**
+            * Return the group definition with the given guid
+            */
+            try {
+                return layerGroups.filter(function(groupConfig) {
+                    return groupConfig.guid === guid;
+                })[0];
+            } catch (e) {
+                return null;
             }
         }
-        return false;
-    }
-
-    /**
-     * Returns a flattened list of all layers found in layerGroups
-     */
-    function getLayerDefs(layerGroups) {
-        var layerDefs = [];
-        for (var m = 0, g; m < layerGroups.length; m++) {
-            g = layerGroups[m];
-            for (var n = 0, l; n < g.layers.length; n++) {
-                l = g.layers[n];
-                layerDefs.push(l);
-            }
-        }
-        return layerDefs;
-    }
-
-    /**
-     * Returns the layer definition with layerName or null if not found
-     */
-    function getLayerDef(layerGroups, layerName) {
-        try {
-            return getLayerDefs(layerGroups).filter(function(layerDef) {
-                return layerDef.layerName === layerName;
-            })[0];
-        } catch (e) {
-            return null;
-        }
-    }
-
-    /**
-     * Return the group definition with the given guid
-     */
-    function getGroupDef(layerGroups, guid) {
-        for (var m = 0, g; m < layerGroups.length; m++) {
-            g = layerGroups[m];
-            if (g.guid === guid) {
-                return g;
-            }
-        }
-        return null;
-    }
-
-    // /**
-    //  * Returns the group associated with the layerName or null if not found
-    //  */
-    // function getGroupDefByLayerName(layerGroups, layerName) {
-    //     for (var m = 0, g; m < layerGroups.length; m++) {
-    //         g = layerGroups[m];
-    //         for (var n = 0, l; n < g.layers.length; n++) {
-    //             l = g.layers[n];
-    //             if (l.layerName === layerName) {
-    //                 return g;
-    //             }
-    //         }
-    //     }
-    //     return null;
-    // }
+    };
 
     var olUtil = {
         getInfoLayers: function(map) {
@@ -453,10 +430,12 @@ var liteMap = (function () {
 
     return {
         liteMap: liteMap,
+        getProfile: getProfile,
         createMap: createMap,
         createOverlay: createOverlay,
         enableInfoClick: enableInfoClick,
-        olUtil: olUtil
+        olUtil: olUtil,
+        profileUtil: profileUtil
     };
 
 })();
