@@ -8,7 +8,7 @@ var iShare = (function () {
             url: mapSourceUrl,
             type: 'jsonp'
         }).then(function (mapSource) {
-            console.log(JSON.stringify(mapSource));
+            // console.log(JSON.stringify(mapSource));
 
             var layerGroups = mapSource.layerGroups.map(function(group) {
                 group.layers = group.layers.map(function(layer) {
@@ -64,7 +64,6 @@ var iShare = (function () {
 
     function createGroup(profile, guid) {
         var groupConfig = profileUtil.getGroupConfig(profile.layerGroups, guid);
-        console.log(groupConfig);
         var group = new ol.layer.Group({
             'iShare:guid': groupConfig.guid,
             "iShare:config": {},
@@ -134,6 +133,8 @@ var iShare = (function () {
 
     }
 
+    // TODO Consider abstracting this out into a plugin with a setMap or setApp(lite)
+    // method which is called when the plugin is added
     function enableInfoClick(lite) {
 
         var profile = lite.profile;
@@ -146,45 +147,22 @@ var iShare = (function () {
             map.addOverlay(lite.popup);
         }
 
-        lite.onInfoClick = function(evt) {
+        // Remove existing handler if it's defined
+        if (lite.handlers["infoClick"]) {
+            map.un('singleclick', lite.handlers["infoClick"]);
+        }
+
+        lite.handlers["infoClick"] = function(evt) {
 
             // Show wait cursor while we are requesting info
             evt.map.getViewport().classList.add('wait');
 
-            function displayInfoResults(results) {
+            function displayInfoResults(error, infoLayers, featureCollections) {
 
                 // Remove wait cursor
                 evt.map.getViewport().classList.remove('wait');
 
-                var reader = new ol.format.WMSGetFeatureInfo()
-                var collections = results.map(function(resp) {
-                    return reader.readFeatures(resp.responseText);
-                });
-
-                var html = collections.map(function(collection, index) {
-                    // Get a reference to the layer based on the index of the
-                    // response in the results Array
-                    var layer = infoLayers[index];
-                    var layerConfig = layer.get("iShare:config");
-                    var html = '';
-                    if (layerConfig.infoClick) {
-                        var collectionHtml = collection.map(function(feature) {
-                            var html = '<div class="infoResult">';
-                            html += layerConfig.fields.map(function(field) {
-                                return '<p><strong>' + field.displayName + '</strong> <span>' + feature.get(field.name) + '</span> </p>';
-                            }).join('\n');
-                            html += '</div>';
-                            return html;
-                        }).join('\n');
-                        if (collectionHtml.length) {
-                            html = '<div class="contentDisplay"><h3>' + layerConfig.displayName + '</h3>';
-                            html += collectionHtml;
-                            html += '</div>';
-                        }
-                    }
-                    return html;
-                }).join('\n');
-
+                var html = olUtil.applyInfoTemplates(infoLayers, featureCollections);
                 if (html.trim().length) {
                     lite.popup.show(evt.coordinate, html);
                 } else {
@@ -193,57 +171,13 @@ var iShare = (function () {
 
             }
 
-            var infoLayers = olUtil.getAllLayers(evt.map.getLayerGroup()).filter(function(layer) {
-                var layerConfig = layer.get("iShare:config");
-                return layer.getVisible() && layerConfig && layerConfig.infoClick;
-            });
+            var infoLayers = olUtil.getInfoLayers(evt.map.getLayerGroup());
 
-            // Create an empty Array to store the results of the GetFeatureInfo
-            // requests in
-            var results = Array(infoLayers.length)
+            olUtil.getInfoAtPoint(evt.map, infoLayers, evt.coordinate, displayInfoResults);
 
-            infoLayers.forEach(function(layer, index) {
-
-                var layerName = layer.get("iShare:layerName");
-
-                var wmsInfoOpts = {
-                    "INFO_FORMAT": "application/vnd.ogc.gml",
-                    'FEATURE_COUNT': 10
-                };
-                // Pick up features within 10 pixels of the click
-                wmsInfoOpts["map.layer[" + layerName + "]"] = "TOLERANCE+10+TOLERANCEUNITS+PIXELS";
-
-                var wmsInfoUrl = layer.getSource().getGetFeatureInfoUrl(
-                    evt.coordinate,
-                    evt.map.getView().getResolution(),
-                    evt.map.getView().getProjection(),
-                    wmsInfoOpts
-                );
-
-                reqwest({
-                    url: wmsInfoUrl
-                }).then(function(resp) {
-                    // Store the response in the appropriate index in the
-                    // results Array
-                    results[index] = resp;
-                    // Determine if all results are now present
-                    for (var i = 0; i < results.length; i++) {
-                        if (results[i] === null) {
-                            // If we find that one of the results is missing
-                            // simply return and wait until all requests are
-                            // complete and the results Array is full
-                            return;
-                        }
-                    }
-                    // At this point all results are in
-                    displayInfoResults(results);
-                });
-
-            });
         };
 
-        map.un('singleclick', lite.onInfoClick);
-        map.on('singleclick', lite.onInfoClick);
+        map.on('singleclick', lite.handlers["infoClick"]);
 
         return lite;
 
@@ -292,6 +226,9 @@ var iShare = (function () {
                     }
                 }
             }
+
+            // Lookup of event handler functions
+            lite.handlers = {};
 
             // By default add infoOnClick functionality
             if (!options.functionality || (!options.functionality.hasOwnProperty('infoOnClick') || options.functionality.infoOnClick)) {
@@ -387,10 +324,86 @@ var iShare = (function () {
     };
 
     var olUtil = {
-        getInfoLayers: function(map) {
-
+        applyInfoTemplates: function(infoLayers, featureCollections) {
+            var html = featureCollections.map(function(collection, index) {
+                // Get a reference to the layer based on the index of the
+                // response in the results Array
+                var layer = infoLayers[index];
+                var layerConfig = layer.get("iShare:config");
+                var html = '';
+                if (layerConfig.infoClick) {
+                    var collectionHtml = collection.map(function(feature) {
+                        var html = '<div class="infoResult">';
+                        html += layerConfig.fields.map(function(field) {
+                            return '<p><strong>' + field.displayName + '</strong> <span>' + feature.get(field.name) + '</span> </p>';
+                        }).join('\n');
+                        html += '</div>';
+                        return html;
+                    }).join('\n');
+                    if (collectionHtml.length) {
+                        html = '<div class="contentDisplay"><h3>' + layerConfig.displayName + '</h3>';
+                        html += collectionHtml;
+                        html += '</div>';
+                    }
+                }
+                return html;
+            }).join('\n');
+            return html
         },
-        getOverlayLayers: function(map) {
+        getInfoAtPoint: function(map, infoLayers, coordinate, callback) {
+            // Create an empty Array to store the results of the GetFeatureInfo
+            // requests in
+            var results = Array(infoLayers.length)
+
+            infoLayers.forEach(function(layer, index) {
+
+                var layerName = layer.get("iShare:layerName");
+
+                var wmsInfoOpts = {
+                    "INFO_FORMAT": "application/vnd.ogc.gml",
+                    'FEATURE_COUNT': 10
+                };
+                // Pick up features within 10 pixels of the click
+                wmsInfoOpts["map.layer[" + layerName + "]"] = "TOLERANCE+10+TOLERANCEUNITS+PIXELS";
+
+                var wmsInfoUrl = layer.getSource().getGetFeatureInfoUrl(
+                    coordinate,
+                    map.getView().getResolution(),
+                    map.getView().getProjection(),
+                    wmsInfoOpts
+                );
+
+                reqwest({
+                    url: wmsInfoUrl
+                }).then(function(resp) {
+                    // Store the response in the appropriate index in the
+                    // results Array
+                    results[index] = resp;
+                    // Determine if all results are now present
+                    for (var i = 0; i < results.length; i++) {
+                        if (results[i] == null) {
+                            // If we find that one of the results is missing
+                            // simply return and wait until all requests are
+                            // complete and the results Array is full
+                            return;
+                        }
+                    }
+                    // At this point all results are in, parse them into
+                    // FeatureCollections
+                    var reader = new ol.format.WMSGetFeatureInfo()
+                    var collections = results.map(function(resp) {
+                        return reader.readFeatures(resp.responseText);
+                    });
+                    callback(null, infoLayers, collections);
+                });
+
+            });
+        },
+        getInfoLayers: function(layerGroup) {
+            return olUtil.getAllLayers(layerGroup).filter(function(layer) {
+                var layerConfig = layer.get("iShare:config");
+                return layer.getVisible() && layerConfig && layerConfig.infoClick;
+            });
         },
         getAllLayers: function(layerGroup) {
             var layers = [];
