@@ -20,7 +20,7 @@
     <script src="https://rawgit.com/walkermatt/ol3-layerswitcher/master/src/ol3-layerswitcher.js"></script>
     <script src="ishare_lite.js"></script>
     <script>
-        iShare.liteMap({
+        var lite = iShare.liteMap({
             'target': 'map',
             'iShareUrl': 'https://maps.astuntechnology.com/iShareLive.Web/',
             'profile': 'mapsources/default',
@@ -29,11 +29,21 @@
                 easting: 521000,
                 northing: 161000,
                 zoom: 10000
-            }
+            },
+            plugins: [new iShare.plugins.InfoPopup()]
         }, function(err, lite) {
             console.log(lite);
+
+            // Add a layer list
+            var layerSwitcher = new ol.control.LayerSwitcher();
+            lite.map.addControl(layerSwitcher);
+
+            // Add the info popup plugin manually
+            // lite.addPlugin(new iShare.plugins.InfoPopup());
+            // Add a global reference for debugging
             window.lite = lite;
         });
+
     </script>
   </body>
 </html>
