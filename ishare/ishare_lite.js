@@ -1,3 +1,5 @@
+"use strict";
+
 var iShare = (function () {
 
     var LiteMap = function(options) {
@@ -57,33 +59,36 @@ var iShare = (function () {
 
         // TODO Add a base map group and add a layer for each base map
 
-        var baseMaps = new ol.layer.Group({
+        var baseMaps = profile.baseMaps.map(function(baseMapDef) {
+            return new ol.layer.Tile({
+                "title": baseMapDef.displayName,
+                "type": "base",
+                "visible": profile.defaultBaseMap === baseMapDef.mapName,
+                "source": new ol.source.TileWMS({
+                    url: baseMapDef.url,
+                    attributions: [
+                        new ol.Attribution({html: profile.attribution})
+                    ],
+                    params: {
+                        'LAYERS': baseMapDef.layers.join(','),
+                        'FORMAT': baseMapDef.format
+                    },
+                    tileGrid: new ol.tilegrid.TileGrid({
+                        origin: profile.extent.slice(0, 2),
+                        resolutions: profile.resolutions
+                    })
+                })
+            });
+        });
+
+        var baseMapGroup = new ol.layer.Group({
             'iShare:guid': 'basemaps',
             'iShare:config': {},
             'title': 'Base maps',
-            'layers': [
-                new ol.layer.Tile({
-                    'title': profile.basemap.displayName,
-                    'type': 'base',
-                    source: new ol.source.TileWMS({
-                        url: profile.basemap.url,
-                        attributions: [
-                            new ol.Attribution({html: profile.attribution})
-                        ],
-                        params: {
-                            'LAYERS': profile.basemap.layers.join(','),
-                            'FORMAT': profile.basemap.format
-                        },
-                        tileGrid: new ol.tilegrid.TileGrid({
-                            origin: profile.extent.slice(0, 2),
-                            resolutions: profile.resolutions
-                        })
-                    })
-                })
-            ]
+            'layers': baseMaps
         });
 
-        this.map.addLayer(baseMaps);
+        this.map.addLayer(baseMapGroup);
 
         var proj = profile.projection;
         proj4.defs(proj.SRS + ':' + proj.SRID, proj.definition);
@@ -138,78 +143,126 @@ var iShare = (function () {
         if (index > -1) {
             plugin.setApp(null);
             this.plugins.splice(index, 1);
+            this.dispatchEvent({"type": "pluginremove", plugin: plugin});
         }
         return plugin;
     };
 
     LiteMap.defaultPlugins = function() {
         return [new InfoPopup()];
-    }
+    };
 
     LiteMap.getProfile = function(iShareUrl, profileName, callback) {
 
-        var mapSourcesUrl = iShareUrl + "getdata.aspx?callback=?&type=jsonp&service=MapSource&RequestType=JSON&ms=root";
+        var rootUrl = iShareUrl + "getdata.aspx?callback=?&type=jsonp&service=MapSource&RequestType=JSON&ms=root";
+
+        // Request root and named profile together then request only those base maps used by named profile
 
         reqwest({
-            url: mapSourcesUrl,
+            url: rootUrl,
             type: 'jsonp'
-        }).then(function (rootMapSource) {
-            console.log(JSON.stringify(rootMapSource));
+        }).then(function (rootProfile) {
+            // console.log(JSON.stringify(rootProfile));
 
-            var mapSourceUrl = iShareUrl + "getdata.aspx?callback=?&type=jsonp&service=MapSource&RequestType=JSON&ms=" + profileName;
+            var requests = [];
 
-            reqwest({
-                url: mapSourceUrl,
-                type: 'jsonp'
-            }).then(function (mapSource) {
-                // console.log(JSON.stringify(mapSource));
+            requests = requests.concat(rootProfile.mapSources.map(function(profile) {
+                return {
+                    "type": "profile",
+                    "mapName": profile.mapName,
+                    "url": iShareUrl + "getdata.aspx?callback=?&type=jsonp&service=MapSource&RequestType=JSON&ms=" + profile.mapName
+                };
+            }));
 
-                var layerGroups = mapSource.layerGroups.map(function(group) {
-                    group.layers = group.layers.map(function(layer) {
+            requests = requests.concat(rootProfile.baseMapSources.map(function(profile) {
+                return {
+                    "type": "basemap",
+                    "mapName": profile.mapName,
+                    "url": iShareUrl + "getdata.aspx?callback=?&type=jsonp&service=MapSource&RequestType=JSON&ms=" + profile.mapName
+                };
+            }));
+            // console.log(requests);
+
+            var results = Array(requests.length);
+            requests.forEach(function(request, index) {
+                reqwest({
+                    url: request.url,
+                    type: 'jsonp'
+                }).then(function (profile) {
+
+                    results[index] = {"type": requests[index].type, "mapName": requests[index].mapName, "profile": profile};
+
+                    for (var i = 0; i < results.length; i++) {
+                        if (results[i] == null) {
+                            // If we find that one of the results is missing
+                            // simply return and wait until all requests are
+                            // complete and the results Array is full
+                            return;
+                        }
+                    }
+                    // console.log(results);
+
+                    // All results are in...
+                    var profiles = results.map(function(result) {
+                        result.profile.mapName = result.mapName;
+                        result.profile.type = result.type;
+                        return result.profile;
+                    });
+                    console.log(profiles);
+
+                    var profileDef = profiles.find(function(profile) {
+                        return profile.mapName === profileName;
+                    });
+                    console.log(profileDef);
+
+                    var baseMapDef = profiles.find(function(profile) {
+                        return profile.mapName === profileDef.defaultBaseMap;
+                    });
+
+                    var layerGroups = profileDef.layerGroups.map(function(group) {
+                        group.layers = group.layers.map(function(layer) {
+                            return {
+                                "layerName": layer.layerName,
+                                "displayName": layer.displayName,
+                                "initiallyVisible": layer.initiallyVisible,
+                                "infoClick": Boolean(layer.infoClick),
+                                "query": layer.query,
+                                "searchField": layer.searchField,
+                                "type": layer.type,
+                                "fields": layer.fields,
+                                "thematic": layer.thematic,
+                                "ows": layer.ows,
+                                "metadata": layer.metadata
+                            };
+                        });
+                        return group;
+                    });
+
+                    var baseMaps = profiles.filter(function(profile) {
+                        return profile.type === 'basemap' && profileDef.baseMaps.indexOf(profile.mapName) > -1;
+                    }).map(function(baseMapDef) {
                         return {
-                            "layerName": layer.layerName,
-                            "displayName": layer.displayName,
-                            "initiallyVisible": layer.initiallyVisible,
-                            "infoClick": Boolean(layer.infoClick),
-                            "query": layer.query,
-                            "searchField": layer.searchField,
-                            "type": layer.type,
-                            "fields": layer.fields,
-                            "thematic": layer.thematic,
-                            "ows": layer.ows,
-                            "metadata": layer.metadata
+                            mapName: baseMapDef.mapName,
+                            displayName: rootProfile.baseMapSources.find(function(ms) {
+                                return ms.mapName === baseMapDef.mapName;
+                            }).displayName,
+                            url: baseMapDef.baseMapDefinition.uri[0],
+                            layers: [baseMapDef.baseMapDefinition.name],
+                            format: baseMapDef.baseMapDefinition.options.format
                         };
                     });
-                    return group;
-                });
-
-                // TODO Get all base map definitions
-                var baseUrl = iShareUrl + 'getdata.aspx?callback=?&type=jsonp&service=MapSource&RequestType=JSON&ms=' + mapSource.defaultBaseMap;
-
-                reqwest({
-                    url: baseUrl,
-                    type: 'jsonp'
-                }).then(function (baseMap) {
-                    // console.log(JSON.stringify(baseMap));
 
                     var profile = {
-                        defaultProfile: rootMapSource.defaultMapSource,
-                        profiles: rootMapSource.mapSources,
-                        baseMaps: rootMapSource.baseMapSources,
-                        extent: mapSource.bounds,
-                        projection: mapSource.projection,
-                        initialView: mapSource.initialView,
-                        units: mapSource.units,
-                        resolutions: baseMap.baseMapDefinition.scales.map(scaleToResolution),
-                        attribution: baseMap.baseMapDefinition.copyright,
-                        basemap: {
-                            displayName: rootMapSource.baseMapSources.filter(function(ms) {
-                                return ms.mapName === mapSource.defaultBaseMap;
-                            })[0].displayName,
-                            url: baseMap.baseMapDefinition.uri[0],
-                            layers: [baseMap.baseMapDefinition.name],
-                            format: baseMap.baseMapDefinition.options.format
-                        },
+                        defaultProfile: rootProfile.defaultMapSource,
+                        defaultBaseMap: profileDef.defaultBaseMap,
+                        profiles: rootProfile.mapSources,
+                        baseMaps: baseMaps,
+                        extent: profileDef.bounds,
+                        projection: profileDef.projection,
+                        initialView: profileDef.initialView,
+                        units: profileDef.units,
+                        resolutions: baseMapDef.baseMapDefinition.scales.map(scaleToResolution),
+                        attribution: baseMapDef.baseMapDefinition.copyright,
                         layerGroups: layerGroups,
                         overlays: {
                             wmsUrl: iShareUrl + 'getows.ashx?mapsource=' + profileName
@@ -218,7 +271,9 @@ var iShare = (function () {
 
                     callback(null, profile);
 
+
                 });
+
             });
 
         });
@@ -291,12 +346,12 @@ var iShare = (function () {
                 }
                 return html;
             }).join('\n');
-            return html
+            return html;
         },
         getInfoAtPoint: function(map, infoLayers, coordinate, callback) {
             // Create an empty Array to store the results of the GetFeatureInfo
             // requests in
-            var results = Array(infoLayers.length)
+            var results = Array(infoLayers.length);
 
             infoLayers.forEach(function(layer, index) {
 
@@ -333,7 +388,7 @@ var iShare = (function () {
                     }
                     // At this point all results are in, parse them into
                     // FeatureCollections
-                    var reader = new ol.format.WMSGetFeatureInfo()
+                    var reader = new ol.format.WMSGetFeatureInfo();
                     var collections = results.map(function(resp) {
                         return reader.readFeatures(resp.responseText);
                     });
@@ -468,11 +523,11 @@ var iShare = (function () {
     */
     function nearestZoom(meters, pixels, resolutions) {
         var items = resolutions.map(function (res, idx) {
-            var item = {'res': res, 'zoom': idx, 'meters': res * pixels}
+            var item = {'res': res, 'zoom': idx, 'meters': res * pixels};
             item.diff = Math.abs(item.meters - meters);
             return item;
         });
-        var nearest = items.sort(function(a, b) {return a.diff - b.diff});
+        var nearest = items.sort(function(a, b) {return a.diff - b.diff;});
         return nearest[0].zoom;
     }
 
@@ -530,6 +585,8 @@ var iShare = (function () {
 
         function displayInfoResults(error, infoLayers, featureCollections) {
 
+            /* jshint validthis: true */
+
             // Remove wait cursor
             evt.map.getViewport().classList.remove('wait');
 
@@ -564,3 +621,49 @@ var iShare = (function () {
 
 })();
 
+// Polyfils
+
+// https://tc39.github.io/ecma262/#sec-array.prototype.find
+if (!Array.prototype.find) {
+    Object.defineProperty(Array.prototype, 'find', {
+        value: function(predicate) {
+            // 1. Let O be ? ToObject(this value).
+            if (this == null) {
+                throw new TypeError('"this" is null or not defined');
+            }
+
+            var o = Object(this);
+
+            // 2. Let len be ? ToLength(? Get(O, "length")).
+            var len = o.length >>> 0;
+
+            // 3. If IsCallable(predicate) is false, throw a TypeError exception.
+            if (typeof predicate !== 'function') {
+                throw new TypeError('predicate must be a function');
+            }
+
+            // 4. If thisArg was supplied, let T be thisArg; else let T be undefined.
+            var thisArg = arguments[1];
+
+            // 5. Let k be 0.
+            var k = 0;
+
+            // 6. Repeat, while k < len
+            while (k < len) {
+                // a. Let Pk be ! ToString(k).
+                // b. Let kValue be ? Get(O, Pk).
+                // c. Let testResult be ToBoolean(? Call(predicate, T, « kValue, k, O »)).
+                // d. If testResult is true, return kValue.
+                var kValue = o[k];
+                if (predicate.call(thisArg, kValue, k, o)) {
+                    return kValue;
+                }
+                // e. Increase k by 1.
+                k++;
+            }
+
+            // 7. Return undefined.
+            return undefined;
+        }
+    });
+}
