@@ -1,5 +1,13 @@
 "use strict";
 
+var reqwest = require("reqwest");
+
+var ol = require("openlayers");
+var proj4 = require("proj4");
+ol.proj.setProj4(proj4);
+
+var Popup = require("ol-popup");
+
 var iShare = (function () {
 
     var LiteMap = function(options) {
@@ -592,7 +600,7 @@ var iShare = (function () {
 
             var popup = evt.map.getOverlayById(this.popupId);
             if (!popup) {
-                popup = new ol.Overlay.Popup({id: this.popupId});
+                popup = new Popup({id: this.popupId});
                 evt.map.addOverlay(popup);
             }
 
@@ -616,10 +624,17 @@ var iShare = (function () {
         liteMap: liteMap,
         plugins: {
             "InfoPopup": InfoPopup
+        },
+        deps: {
+            ol: ol,
+            reqwest: reqwest,
+            Popup: Popup
         }
     };
 
 })();
+
+module.exports = iShare;
 
 // Polyfils
 
