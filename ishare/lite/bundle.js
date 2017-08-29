@@ -1,13 +1,13 @@
 (function(f){if(typeof exports==="object"&&typeof module!=="undefined"){module.exports=f()}else if(typeof define==="function"&&define.amd){define([],f)}else{var g;if(typeof window!=="undefined"){g=window}else if(typeof global!=="undefined"){g=global}else if(typeof self!=="undefined"){g=self}else{g=this}g.iShare = f()}})(function(){var define,module,exports;return (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
 "use strict";
 
-var reqwest = require("reqwest");
-
 var ol = require("openlayers");
 var proj4 = require("proj4");
 ol.proj.setProj4(proj4);
 
 var Popup = require("ol-popup");
+
+var parallel = require('run-parallel');
 
 var iShare = (function () {
 
@@ -65,8 +65,6 @@ var iShare = (function () {
     LiteMap.prototype.loadProfile = function(profile) {
 
         this.profile = profile;
-
-        // TODO Add a base map group and add a layer for each base map
 
         var baseMaps = profile.baseMaps.map(function(baseMapDef) {
             return new ol.layer.Tile({
@@ -163,125 +161,108 @@ var iShare = (function () {
 
     LiteMap.getProfile = function(iShareUrl, profileName, callback) {
 
-        var rootUrl = iShareUrl + "getdata.aspx?callback=?&type=jsonp&service=MapSource&RequestType=JSON&ms=root";
+        /**
+         * Returns a MapSource URL
+         */
+        function getProfileUrl(profileName) {
+            return iShareUrl + "getdata.aspx?&type=MapSource&RequestType=JSON&ms=" + profileName;
+        }
 
-        // Request root and named profile together then request only those base maps used by named profile
+        /**
+         * Returns a function that will request profile config from the server
+         */
+        function profileRequest(type, profileName) {
+            return function(callback) {
+                http.getJson(getProfileUrl(profileName), function(err, profile, xhr) {
+                    // Ignore any HTTP errors, let the downstream code decide
+                    // what to do about missing profiles
+                    callback(null, {"type": type, "mapName": profileName, "profile": profile});
+                });
+            };
+        }
 
-        reqwest({
-            url: rootUrl,
-            type: 'jsonp'
-        }).then(function (rootProfile) {
+        http.getJson(getProfileUrl("root"), function(err, rootProfile, xhr) {
             // console.log(JSON.stringify(rootProfile));
 
             var requests = [];
 
             requests = requests.concat(rootProfile.mapSources.map(function(profile) {
-                return {
-                    "type": "profile",
-                    "mapName": profile.mapName,
-                    "url": iShareUrl + "getdata.aspx?callback=?&type=jsonp&service=MapSource&RequestType=JSON&ms=" + profile.mapName
-                };
+                return profileRequest("profile", profile.mapName);
             }));
 
             requests = requests.concat(rootProfile.baseMapSources.map(function(profile) {
-                return {
-                    "type": "basemap",
-                    "mapName": profile.mapName,
-                    "url": iShareUrl + "getdata.aspx?callback=?&type=jsonp&service=MapSource&RequestType=JSON&ms=" + profile.mapName
-                };
+                return profileRequest("basemap", profile.mapName);
             }));
-            // console.log(requests);
 
-            var results = Array(requests.length);
-            requests.forEach(function(request, index) {
-                reqwest({
-                    url: request.url,
-                    type: 'jsonp'
-                }).then(function (profile) {
+            parallel(requests, function(err, results) {
 
-                    results[index] = {"type": requests[index].type, "mapName": requests[index].mapName, "profile": profile};
+                var profiles = results.map(function(result) {
+                    result.profile.mapName = result.mapName;
+                    result.profile.type = result.type;
+                    return result.profile;
+                });
+                // console.log(profiles);
 
-                    for (var i = 0; i < results.length; i++) {
-                        if (results[i] == null) {
-                            // If we find that one of the results is missing
-                            // simply return and wait until all requests are
-                            // complete and the results Array is full
-                            return;
-                        }
-                    }
-                    // console.log(results);
+                var profileDef = profiles.find(function(profile) {
+                    return profile.mapName === profileName;
+                });
+                // console.log(profileDef);
 
-                    // All results are in...
-                    var profiles = results.map(function(result) {
-                        result.profile.mapName = result.mapName;
-                        result.profile.type = result.type;
-                        return result.profile;
-                    });
-                    console.log(profiles);
+                var baseMapDef = profiles.find(function(profile) {
+                    return profile.mapName === profileDef.defaultBaseMap;
+                });
 
-                    var profileDef = profiles.find(function(profile) {
-                        return profile.mapName === profileName;
-                    });
-                    console.log(profileDef);
-
-                    var baseMapDef = profiles.find(function(profile) {
-                        return profile.mapName === profileDef.defaultBaseMap;
-                    });
-
-                    var layerGroups = profileDef.layerGroups.map(function(group) {
-                        group.layers = group.layers.map(function(layer) {
-                            return {
-                                "layerName": layer.layerName,
-                                "displayName": layer.displayName,
-                                "initiallyVisible": layer.initiallyVisible,
-                                "infoClick": Boolean(layer.infoClick),
-                                "query": layer.query,
-                                "searchField": layer.searchField,
-                                "type": layer.type,
-                                "fields": layer.fields,
-                                "thematic": layer.thematic,
-                                "ows": layer.ows,
-                                "metadata": layer.metadata
-                            };
-                        });
-                        return group;
-                    });
-
-                    var baseMaps = profiles.filter(function(profile) {
-                        return profile.type === 'basemap' && profileDef.baseMaps.indexOf(profile.mapName) > -1;
-                    }).map(function(baseMapDef) {
+                var layerGroups = profileDef.layerGroups.map(function(group) {
+                    group.layers = group.layers.map(function(layer) {
                         return {
-                            mapName: baseMapDef.mapName,
-                            displayName: rootProfile.baseMapSources.find(function(ms) {
-                                return ms.mapName === baseMapDef.mapName;
-                            }).displayName,
-                            url: baseMapDef.baseMapDefinition.uri[0],
-                            layers: [baseMapDef.baseMapDefinition.name],
-                            format: baseMapDef.baseMapDefinition.options.format
+                            "layerName": layer.layerName,
+                            "displayName": layer.displayName,
+                            "initiallyVisible": layer.initiallyVisible,
+                            "infoClick": Boolean(layer.infoClick),
+                            "query": layer.query,
+                            "searchField": layer.searchField,
+                            "type": layer.type,
+                            "fields": layer.fields,
+                            "thematic": layer.thematic,
+                            "ows": layer.ows,
+                            "metadata": layer.metadata
                         };
                     });
-
-                    var profile = {
-                        defaultProfile: rootProfile.defaultMapSource,
-                        defaultBaseMap: profileDef.defaultBaseMap,
-                        profiles: rootProfile.mapSources,
-                        baseMaps: baseMaps,
-                        extent: profileDef.bounds,
-                        projection: profileDef.projection,
-                        initialView: profileDef.initialView,
-                        units: profileDef.units,
-                        resolutions: baseMapDef.baseMapDefinition.scales.map(scaleToResolution),
-                        attribution: baseMapDef.baseMapDefinition.copyright,
-                        layerGroups: layerGroups,
-                        overlays: {
-                            wmsUrl: iShareUrl + 'getows.ashx?mapsource=' + profileName
-                        }
-                    };
-
-                    callback(null, profile);
-
-
+                    return group;
                 });
+
+                var baseMaps = profiles.filter(function(profile) {
+                    return profile.type === 'basemap' && profileDef.baseMaps.indexOf(profile.mapName) > -1;
+                }).map(function(baseMapDef) {
+                    return {
+                        mapName: baseMapDef.mapName,
+                        displayName: rootProfile.baseMapSources.find(function(ms) {
+                            return ms.mapName === baseMapDef.mapName;
+                        }).displayName,
+                        url: baseMapDef.baseMapDefinition.uri[0],
+                        layers: [baseMapDef.baseMapDefinition.name],
+                        format: baseMapDef.baseMapDefinition.options.format
+                    };
+                });
+
+                var profile = {
+                    defaultProfile: rootProfile.defaultMapSource,
+                    defaultBaseMap: profileDef.defaultBaseMap,
+                    profiles: rootProfile.mapSources,
+                    baseMaps: baseMaps,
+                    extent: profileDef.bounds,
+                    projection: profileDef.projection,
+                    initialView: profileDef.initialView,
+                    units: profileDef.units,
+                    resolutions: baseMapDef.baseMapDefinition.scales.map(scaleToResolution),
+                    attribution: baseMapDef.baseMapDefinition.copyright,
+                    layerGroups: layerGroups,
+                    overlays: {
+                        wmsUrl: iShareUrl + 'getows.ashx?mapsource=' + profileName
+                    }
+                };
+
+                callback(null, profile);
 
             });
 
@@ -358,53 +339,45 @@ var iShare = (function () {
             return html;
         },
         getInfoAtPoint: function(map, infoLayers, coordinate, callback) {
-            // Create an empty Array to store the results of the GetFeatureInfo
-            // requests in
-            var results = Array(infoLayers.length);
 
-            infoLayers.forEach(function(layer, index) {
+            function infoRequest(map, layer, coordinate) {
 
-                var layerName = layer.get("iShare:layerName");
+                return function(callback) {
 
-                var wmsInfoOpts = {
-                    "INFO_FORMAT": "application/vnd.ogc.gml",
-                    'FEATURE_COUNT': 10
-                };
-                // Pick up features within 10 pixels of the click
-                wmsInfoOpts["map.layer[" + layerName + "]"] = "TOLERANCE+10+TOLERANCEUNITS+PIXELS";
+                    var layerName = layer.get("iShare:layerName");
 
-                var wmsInfoUrl = layer.getSource().getGetFeatureInfoUrl(
-                    coordinate,
-                    map.getView().getResolution(),
-                    map.getView().getProjection(),
-                    wmsInfoOpts
-                );
+                    var wmsInfoOpts = {
+                        "INFO_FORMAT": "application/vnd.ogc.gml",
+                        'FEATURE_COUNT': 10
+                    };
+                    // Pick up features within 10 pixels of the click
+                    wmsInfoOpts["map.layer[" + layerName + "]"] = "TOLERANCE+10+TOLERANCEUNITS+PIXELS";
 
-                reqwest({
-                    url: wmsInfoUrl
-                }).then(function(resp) {
-                    // Store the response in the appropriate index in the
-                    // results Array
-                    results[index] = resp;
-                    // Determine if all results are now present
-                    for (var i = 0; i < results.length; i++) {
-                        if (results[i] == null) {
-                            // If we find that one of the results is missing
-                            // simply return and wait until all requests are
-                            // complete and the results Array is full
-                            return;
-                        }
-                    }
-                    // At this point all results are in, parse them into
-                    // FeatureCollections
-                    var reader = new ol.format.WMSGetFeatureInfo();
-                    var collections = results.map(function(resp) {
-                        return reader.readFeatures(resp.responseText);
+                    var wmsInfoUrl = layer.getSource().getGetFeatureInfoUrl(
+                        coordinate,
+                        map.getView().getResolution(),
+                        map.getView().getProjection(),
+                        wmsInfoOpts
+                    );
+
+                    http.get(wmsInfoUrl, function(err, gmlText, xhr) {
+                        var reader = new ol.format.WMSGetFeatureInfo();
+                        var collection = reader.readFeatures(gmlText);
+                        callback(null, collection);
                     });
-                    callback(null, infoLayers, collections);
-                });
 
+                };
+
+            };
+
+            var requests = infoLayers.map(function(layer) {
+                return infoRequest(map, layer, coordinate);
             });
+
+            parallel(requests, function(err, results) {
+                callback(err, infoLayers, results);
+            });
+
         },
         getInfoLayers: function(layerGroup) {
             return LiteMap.ol.findLayers(layerGroup, function(layer) {
@@ -620,15 +593,56 @@ var iShare = (function () {
 
     };
 
+    var http = {
+        get: function(url, callback) {
+            /**
+            * Make a GET HTTP request
+            * The callback has signiture function(error, text, xhr)
+            */
+            var xhr = new XMLHttpRequest();
+            xhr.open('GET', url, true);
+            xhr.onload = function(event) {
+                if (!xhr.status || xhr.status >= 200 && xhr.status < 300) {
+                    var text = xhr.responseText;
+                    callback(null, text, xhr);
+                } else {
+                    var err = new Error("Error making request");
+                    err.name = 'RequestError';
+                    callback(err, null, xhr);
+                }
+            };
+            xhr.send();
+            return xhr;
+        },
+        getJson: function(url, callback) {
+            /**
+            * Make a GET HTTP request for a JSON document
+            * The callback has signiture function(error, json, xhr)
+            */
+            return http.get(url, function(err, text, xhr) {
+                if (err) {
+                    callback(err, null, xhr);
+                    return;
+                }
+                try {
+                    var json = JSON.parse(text);
+                    callback(null, json, xhr);
+                } catch (e) {
+                    callback(e, null, xhr);
+                }
+            });
+        }
+    };
+
     return {
         LiteMap: LiteMap,
         liteMap: liteMap,
         plugins: {
             "InfoPopup": InfoPopup
         },
+        http: http,
         deps: {
             ol: ol,
-            reqwest: reqwest,
             Popup: Popup
         }
     };
@@ -684,9 +698,7 @@ if (!Array.prototype.find) {
     });
 }
 
-},{"ol-popup":3,"openlayers":4,"proj4":5,"reqwest":6}],2:[function(require,module,exports){
-
-},{}],3:[function(require,module,exports){
+},{"ol-popup":2,"openlayers":3,"proj4":5,"run-parallel":6}],2:[function(require,module,exports){
 (function (root, factory) {
   if(typeof define === "function" && define.amd) {
     define(["openlayers"], factory);
@@ -816,7 +828,7 @@ if (!Array.prototype.find) {
 
 }));
 
-},{"openlayers":4}],4:[function(require,module,exports){
+},{"openlayers":3}],3:[function(require,module,exports){
 (function (global){
 // OpenLayers. See https://openlayers.org/
 // License: https://raw.githubusercontent.com/openlayers/openlayers/master/LICENSE.md
@@ -1827,6 +1839,192 @@ Ok.prototype.changed=Ok.prototype.s;Ok.prototype.dispatchEvent=Ok.prototype.b;Ok
 
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
+},{}],4:[function(require,module,exports){
+// shim for using process in browser
+var process = module.exports = {};
+
+// cached from whatever global is present so that test runners that stub it
+// don't break things.  But we need to wrap it in a try catch in case it is
+// wrapped in strict mode code which doesn't define any globals.  It's inside a
+// function because try/catches deoptimize in certain engines.
+
+var cachedSetTimeout;
+var cachedClearTimeout;
+
+function defaultSetTimout() {
+    throw new Error('setTimeout has not been defined');
+}
+function defaultClearTimeout () {
+    throw new Error('clearTimeout has not been defined');
+}
+(function () {
+    try {
+        if (typeof setTimeout === 'function') {
+            cachedSetTimeout = setTimeout;
+        } else {
+            cachedSetTimeout = defaultSetTimout;
+        }
+    } catch (e) {
+        cachedSetTimeout = defaultSetTimout;
+    }
+    try {
+        if (typeof clearTimeout === 'function') {
+            cachedClearTimeout = clearTimeout;
+        } else {
+            cachedClearTimeout = defaultClearTimeout;
+        }
+    } catch (e) {
+        cachedClearTimeout = defaultClearTimeout;
+    }
+} ())
+function runTimeout(fun) {
+    if (cachedSetTimeout === setTimeout) {
+        //normal enviroments in sane situations
+        return setTimeout(fun, 0);
+    }
+    // if setTimeout wasn't available but was latter defined
+    if ((cachedSetTimeout === defaultSetTimout || !cachedSetTimeout) && setTimeout) {
+        cachedSetTimeout = setTimeout;
+        return setTimeout(fun, 0);
+    }
+    try {
+        // when when somebody has screwed with setTimeout but no I.E. maddness
+        return cachedSetTimeout(fun, 0);
+    } catch(e){
+        try {
+            // When we are in I.E. but the script has been evaled so I.E. doesn't trust the global object when called normally
+            return cachedSetTimeout.call(null, fun, 0);
+        } catch(e){
+            // same as above but when it's a version of I.E. that must have the global object for 'this', hopfully our context correct otherwise it will throw a global error
+            return cachedSetTimeout.call(this, fun, 0);
+        }
+    }
+
+
+}
+function runClearTimeout(marker) {
+    if (cachedClearTimeout === clearTimeout) {
+        //normal enviroments in sane situations
+        return clearTimeout(marker);
+    }
+    // if clearTimeout wasn't available but was latter defined
+    if ((cachedClearTimeout === defaultClearTimeout || !cachedClearTimeout) && clearTimeout) {
+        cachedClearTimeout = clearTimeout;
+        return clearTimeout(marker);
+    }
+    try {
+        // when when somebody has screwed with setTimeout but no I.E. maddness
+        return cachedClearTimeout(marker);
+    } catch (e){
+        try {
+            // When we are in I.E. but the script has been evaled so I.E. doesn't  trust the global object when called normally
+            return cachedClearTimeout.call(null, marker);
+        } catch (e){
+            // same as above but when it's a version of I.E. that must have the global object for 'this', hopfully our context correct otherwise it will throw a global error.
+            // Some versions of I.E. have different rules for clearTimeout vs setTimeout
+            return cachedClearTimeout.call(this, marker);
+        }
+    }
+
+
+
+}
+var queue = [];
+var draining = false;
+var currentQueue;
+var queueIndex = -1;
+
+function cleanUpNextTick() {
+    if (!draining || !currentQueue) {
+        return;
+    }
+    draining = false;
+    if (currentQueue.length) {
+        queue = currentQueue.concat(queue);
+    } else {
+        queueIndex = -1;
+    }
+    if (queue.length) {
+        drainQueue();
+    }
+}
+
+function drainQueue() {
+    if (draining) {
+        return;
+    }
+    var timeout = runTimeout(cleanUpNextTick);
+    draining = true;
+
+    var len = queue.length;
+    while(len) {
+        currentQueue = queue;
+        queue = [];
+        while (++queueIndex < len) {
+            if (currentQueue) {
+                currentQueue[queueIndex].run();
+            }
+        }
+        queueIndex = -1;
+        len = queue.length;
+    }
+    currentQueue = null;
+    draining = false;
+    runClearTimeout(timeout);
+}
+
+process.nextTick = function (fun) {
+    var args = new Array(arguments.length - 1);
+    if (arguments.length > 1) {
+        for (var i = 1; i < arguments.length; i++) {
+            args[i - 1] = arguments[i];
+        }
+    }
+    queue.push(new Item(fun, args));
+    if (queue.length === 1 && !draining) {
+        runTimeout(drainQueue);
+    }
+};
+
+// v8 likes predictible objects
+function Item(fun, array) {
+    this.fun = fun;
+    this.array = array;
+}
+Item.prototype.run = function () {
+    this.fun.apply(null, this.array);
+};
+process.title = 'browser';
+process.browser = true;
+process.env = {};
+process.argv = [];
+process.version = ''; // empty string to avoid regexp issues
+process.versions = {};
+
+function noop() {}
+
+process.on = noop;
+process.addListener = noop;
+process.once = noop;
+process.off = noop;
+process.removeListener = noop;
+process.removeAllListeners = noop;
+process.emit = noop;
+process.prependListener = noop;
+process.prependOnceListener = noop;
+
+process.listeners = function (name) { return [] }
+
+process.binding = function (name) {
+    throw new Error('process.binding is not supported');
+};
+
+process.cwd = function () { return '/' };
+process.chdir = function (dir) {
+    throw new Error('process.chdir is not supported');
+};
+process.umask = function() { return 0; };
+
 },{}],5:[function(require,module,exports){
 (function (global, factory) {
 	typeof exports === 'object' && typeof module !== 'undefined' ? module.exports = factory() :
@@ -7747,636 +7945,54 @@ Ok.prototype.changed=Ok.prototype.s;Ok.prototype.dispatchEvent=Ok.prototype.b;Ok
 })));
 
 },{}],6:[function(require,module,exports){
-/*!
-  * Reqwest! A general purpose XHR connection manager
-  * license MIT (c) Dustin Diaz 2015
-  * https://github.com/ded/reqwest
-  */
+(function (process){
+module.exports = function (tasks, cb) {
+  var results, pending, keys
+  var isSync = true
 
-!function (name, context, definition) {
-  if (typeof module != 'undefined' && module.exports) module.exports = definition()
-  else if (typeof define == 'function' && define.amd) define(definition)
-  else context[name] = definition()
-}('reqwest', this, function () {
-
-  var context = this
-
-  if ('window' in context) {
-    var doc = document
-      , byTag = 'getElementsByTagName'
-      , head = doc[byTag]('head')[0]
+  if (Array.isArray(tasks)) {
+    results = []
+    pending = tasks.length
   } else {
-    var XHR2
-    try {
-      XHR2 = require('xhr2')
-    } catch (ex) {
-      throw new Error('Peer dependency `xhr2` required! Please npm install xhr2')
+    keys = Object.keys(tasks)
+    results = {}
+    pending = keys.length
+  }
+
+  function done (err) {
+    function end () {
+      if (cb) cb(err, results)
+      cb = null
+    }
+    if (isSync) process.nextTick(end)
+    else end()
+  }
+
+  function each (i, err, result) {
+    results[i] = result
+    if (--pending === 0 || err) {
+      done(err)
     }
   }
 
-
-  var httpsRe = /^http/
-    , protocolRe = /(^\w+):\/\//
-    , twoHundo = /^(20\d|1223)$/ //http://stackoverflow.com/questions/10046972/msie-returns-status-code-of-1223-for-ajax-request
-    , readyState = 'readyState'
-    , contentType = 'Content-Type'
-    , requestedWith = 'X-Requested-With'
-    , uniqid = 0
-    , callbackPrefix = 'reqwest_' + (+new Date())
-    , lastValue // data stored by the most recent JSONP callback
-    , xmlHttpRequest = 'XMLHttpRequest'
-    , xDomainRequest = 'XDomainRequest'
-    , noop = function () {}
-
-    , isArray = typeof Array.isArray == 'function'
-        ? Array.isArray
-        : function (a) {
-            return a instanceof Array
-          }
-
-    , defaultHeaders = {
-          'contentType': 'application/x-www-form-urlencoded'
-        , 'requestedWith': xmlHttpRequest
-        , 'accept': {
-              '*':  'text/javascript, text/html, application/xml, text/xml, */*'
-            , 'xml':  'application/xml, text/xml'
-            , 'html': 'text/html'
-            , 'text': 'text/plain'
-            , 'json': 'application/json, text/javascript'
-            , 'js':   'application/javascript, text/javascript'
-          }
-      }
-
-    , xhr = function(o) {
-        // is it x-domain
-        if (o['crossOrigin'] === true) {
-          var xhr = context[xmlHttpRequest] ? new XMLHttpRequest() : null
-          if (xhr && 'withCredentials' in xhr) {
-            return xhr
-          } else if (context[xDomainRequest]) {
-            return new XDomainRequest()
-          } else {
-            throw new Error('Browser does not support cross-origin requests')
-          }
-        } else if (context[xmlHttpRequest]) {
-          return new XMLHttpRequest()
-        } else if (XHR2) {
-          return new XHR2()
-        } else {
-          return new ActiveXObject('Microsoft.XMLHTTP')
-        }
-      }
-    , globalSetupOptions = {
-        dataFilter: function (data) {
-          return data
-        }
-      }
-
-  function succeed(r) {
-    var protocol = protocolRe.exec(r.url)
-    protocol = (protocol && protocol[1]) || context.location.protocol
-    return httpsRe.test(protocol) ? twoHundo.test(r.request.status) : !!r.request.response
+  if (!pending) {
+    // empty
+    done(null)
+  } else if (keys) {
+    // object
+    keys.forEach(function (key) {
+      tasks[key](function (err, result) { each(key, err, result) })
+    })
+  } else {
+    // array
+    tasks.forEach(function (task, i) {
+      task(function (err, result) { each(i, err, result) })
+    })
   }
 
-  function handleReadyState(r, success, error) {
-    return function () {
-      // use _aborted to mitigate against IE err c00c023f
-      // (can't read props on aborted request objects)
-      if (r._aborted) return error(r.request)
-      if (r._timedOut) return error(r.request, 'Request is aborted: timeout')
-      if (r.request && r.request[readyState] == 4) {
-        r.request.onreadystatechange = noop
-        if (succeed(r)) success(r.request)
-        else
-          error(r.request)
-      }
-    }
-  }
-
-  function setHeaders(http, o) {
-    var headers = o['headers'] || {}
-      , h
-
-    headers['Accept'] = headers['Accept']
-      || defaultHeaders['accept'][o['type']]
-      || defaultHeaders['accept']['*']
-
-    var isAFormData = typeof FormData !== 'undefined' && (o['data'] instanceof FormData);
-    // breaks cross-origin requests with legacy browsers
-    if (!o['crossOrigin'] && !headers[requestedWith]) headers[requestedWith] = defaultHeaders['requestedWith']
-    if (!headers[contentType] && !isAFormData) headers[contentType] = o['contentType'] || defaultHeaders['contentType']
-    for (h in headers)
-      headers.hasOwnProperty(h) && 'setRequestHeader' in http && http.setRequestHeader(h, headers[h])
-  }
-
-  function setCredentials(http, o) {
-    if (typeof o['withCredentials'] !== 'undefined' && typeof http.withCredentials !== 'undefined') {
-      http.withCredentials = !!o['withCredentials']
-    }
-  }
-
-  function generalCallback(data) {
-    lastValue = data
-  }
-
-  function urlappend (url, s) {
-    return url + (/\?/.test(url) ? '&' : '?') + s
-  }
-
-  function handleJsonp(o, fn, err, url) {
-    var reqId = uniqid++
-      , cbkey = o['jsonpCallback'] || 'callback' // the 'callback' key
-      , cbval = o['jsonpCallbackName'] || reqwest.getcallbackPrefix(reqId)
-      , cbreg = new RegExp('((^|\\?|&)' + cbkey + ')=([^&]+)')
-      , match = url.match(cbreg)
-      , script = doc.createElement('script')
-      , loaded = 0
-      , isIE10 = navigator.userAgent.indexOf('MSIE 10.0') !== -1
-
-    if (match) {
-      if (match[3] === '?') {
-        url = url.replace(cbreg, '$1=' + cbval) // wildcard callback func name
-      } else {
-        cbval = match[3] // provided callback func name
-      }
-    } else {
-      url = urlappend(url, cbkey + '=' + cbval) // no callback details, add 'em
-    }
-
-    context[cbval] = generalCallback
-
-    script.type = 'text/javascript'
-    script.src = url
-    script.async = true
-    if (typeof script.onreadystatechange !== 'undefined' && !isIE10) {
-      // need this for IE due to out-of-order onreadystatechange(), binding script
-      // execution to an event listener gives us control over when the script
-      // is executed. See http://jaubourg.net/2010/07/loading-script-as-onclick-handler-of.html
-      script.htmlFor = script.id = '_reqwest_' + reqId
-    }
-
-    script.onload = script.onreadystatechange = function () {
-      if ((script[readyState] && script[readyState] !== 'complete' && script[readyState] !== 'loaded') || loaded) {
-        return false
-      }
-      script.onload = script.onreadystatechange = null
-      script.onclick && script.onclick()
-      // Call the user callback with the last value stored and clean up values and scripts.
-      fn(lastValue)
-      lastValue = undefined
-      head.removeChild(script)
-      loaded = 1
-    }
-
-    // Add the script to the DOM head
-    head.appendChild(script)
-
-    // Enable JSONP timeout
-    return {
-      abort: function () {
-        script.onload = script.onreadystatechange = null
-        err({}, 'Request is aborted: timeout', {})
-        lastValue = undefined
-        head.removeChild(script)
-        loaded = 1
-      }
-    }
-  }
-
-  function getRequest(fn, err) {
-    var o = this.o
-      , method = (o['method'] || 'GET').toUpperCase()
-      , url = typeof o === 'string' ? o : o['url']
-      // convert non-string objects to query-string form unless o['processData'] is false
-      , data = (o['processData'] !== false && o['data'] && typeof o['data'] !== 'string')
-        ? reqwest.toQueryString(o['data'])
-        : (o['data'] || null)
-      , http
-      , sendWait = false
-
-    // if we're working on a GET request and we have data then we should append
-    // query string to end of URL and not post data
-    if ((o['type'] == 'jsonp' || method == 'GET') && data) {
-      url = urlappend(url, data)
-      data = null
-    }
-
-    if (o['type'] == 'jsonp') return handleJsonp(o, fn, err, url)
-
-    // get the xhr from the factory if passed
-    // if the factory returns null, fall-back to ours
-    http = (o.xhr && o.xhr(o)) || xhr(o)
-
-    http.open(method, url, o['async'] === false ? false : true)
-    setHeaders(http, o)
-    setCredentials(http, o)
-    if (context[xDomainRequest] && http instanceof context[xDomainRequest]) {
-        http.onload = fn
-        http.onerror = err
-        // NOTE: see
-        // http://social.msdn.microsoft.com/Forums/en-US/iewebdevelopment/thread/30ef3add-767c-4436-b8a9-f1ca19b4812e
-        http.onprogress = function() {}
-        sendWait = true
-    } else {
-      http.onreadystatechange = handleReadyState(this, fn, err)
-    }
-    o['before'] && o['before'](http)
-    if (sendWait) {
-      setTimeout(function () {
-        http.send(data)
-      }, 200)
-    } else {
-      http.send(data)
-    }
-    return http
-  }
-
-  function Reqwest(o, fn) {
-    this.o = o
-    this.fn = fn
-
-    init.apply(this, arguments)
-  }
-
-  function setType(header) {
-    // json, javascript, text/plain, text/html, xml
-    if (header === null) return undefined; //In case of no content-type.
-    if (header.match('json')) return 'json'
-    if (header.match('javascript')) return 'js'
-    if (header.match('text')) return 'html'
-    if (header.match('xml')) return 'xml'
-  }
-
-  function init(o, fn) {
-
-    this.url = typeof o == 'string' ? o : o['url']
-    this.timeout = null
-
-    // whether request has been fulfilled for purpose
-    // of tracking the Promises
-    this._fulfilled = false
-    // success handlers
-    this._successHandler = function(){}
-    this._fulfillmentHandlers = []
-    // error handlers
-    this._errorHandlers = []
-    // complete (both success and fail) handlers
-    this._completeHandlers = []
-    this._erred = false
-    this._responseArgs = {}
-
-    var self = this
-
-    fn = fn || function () {}
-
-    if (o['timeout']) {
-      this.timeout = setTimeout(function () {
-        timedOut()
-      }, o['timeout'])
-    }
-
-    if (o['success']) {
-      this._successHandler = function () {
-        o['success'].apply(o, arguments)
-      }
-    }
-
-    if (o['error']) {
-      this._errorHandlers.push(function () {
-        o['error'].apply(o, arguments)
-      })
-    }
-
-    if (o['complete']) {
-      this._completeHandlers.push(function () {
-        o['complete'].apply(o, arguments)
-      })
-    }
-
-    function complete (resp) {
-      o['timeout'] && clearTimeout(self.timeout)
-      self.timeout = null
-      while (self._completeHandlers.length > 0) {
-        self._completeHandlers.shift()(resp)
-      }
-    }
-
-    function success (resp) {
-      var type = o['type'] || resp && setType(resp.getResponseHeader('Content-Type')) // resp can be undefined in IE
-      resp = (type !== 'jsonp') ? self.request : resp
-      // use global data filter on response text
-      var filteredResponse = globalSetupOptions.dataFilter(resp.responseText, type)
-        , r = filteredResponse
-      try {
-        resp.responseText = r
-      } catch (e) {
-        // can't assign this in IE<=8, just ignore
-      }
-      if (r) {
-        switch (type) {
-        case 'json':
-          try {
-            resp = context.JSON ? context.JSON.parse(r) : eval('(' + r + ')')
-          } catch (err) {
-            return error(resp, 'Could not parse JSON in response', err)
-          }
-          break
-        case 'js':
-          resp = eval(r)
-          break
-        case 'html':
-          resp = r
-          break
-        case 'xml':
-          resp = resp.responseXML
-              && resp.responseXML.parseError // IE trololo
-              && resp.responseXML.parseError.errorCode
-              && resp.responseXML.parseError.reason
-            ? null
-            : resp.responseXML
-          break
-        }
-      }
-
-      self._responseArgs.resp = resp
-      self._fulfilled = true
-      fn(resp)
-      self._successHandler(resp)
-      while (self._fulfillmentHandlers.length > 0) {
-        resp = self._fulfillmentHandlers.shift()(resp)
-      }
-
-      complete(resp)
-    }
-
-    function timedOut() {
-      self._timedOut = true
-      self.request.abort()
-    }
-
-    function error(resp, msg, t) {
-      resp = self.request
-      self._responseArgs.resp = resp
-      self._responseArgs.msg = msg
-      self._responseArgs.t = t
-      self._erred = true
-      while (self._errorHandlers.length > 0) {
-        self._errorHandlers.shift()(resp, msg, t)
-      }
-      complete(resp)
-    }
-
-    this.request = getRequest.call(this, success, error)
-  }
-
-  Reqwest.prototype = {
-    abort: function () {
-      this._aborted = true
-      this.request.abort()
-    }
-
-  , retry: function () {
-      init.call(this, this.o, this.fn)
-    }
-
-    /**
-     * Small deviation from the Promises A CommonJs specification
-     * http://wiki.commonjs.org/wiki/Promises/A
-     */
-
-    /**
-     * `then` will execute upon successful requests
-     */
-  , then: function (success, fail) {
-      success = success || function () {}
-      fail = fail || function () {}
-      if (this._fulfilled) {
-        this._responseArgs.resp = success(this._responseArgs.resp)
-      } else if (this._erred) {
-        fail(this._responseArgs.resp, this._responseArgs.msg, this._responseArgs.t)
-      } else {
-        this._fulfillmentHandlers.push(success)
-        this._errorHandlers.push(fail)
-      }
-      return this
-    }
-
-    /**
-     * `always` will execute whether the request succeeds or fails
-     */
-  , always: function (fn) {
-      if (this._fulfilled || this._erred) {
-        fn(this._responseArgs.resp)
-      } else {
-        this._completeHandlers.push(fn)
-      }
-      return this
-    }
-
-    /**
-     * `fail` will execute when the request fails
-     */
-  , fail: function (fn) {
-      if (this._erred) {
-        fn(this._responseArgs.resp, this._responseArgs.msg, this._responseArgs.t)
-      } else {
-        this._errorHandlers.push(fn)
-      }
-      return this
-    }
-  , 'catch': function (fn) {
-      return this.fail(fn)
-    }
-  }
-
-  function reqwest(o, fn) {
-    return new Reqwest(o, fn)
-  }
-
-  // normalize newline variants according to spec -> CRLF
-  function normalize(s) {
-    return s ? s.replace(/\r?\n/g, '\r\n') : ''
-  }
-
-  function serial(el, cb) {
-    var n = el.name
-      , t = el.tagName.toLowerCase()
-      , optCb = function (o) {
-          // IE gives value="" even where there is no value attribute
-          // 'specified' ref: http://www.w3.org/TR/DOM-Level-3-Core/core.html#ID-862529273
-          if (o && !o['disabled'])
-            cb(n, normalize(o['attributes']['value'] && o['attributes']['value']['specified'] ? o['value'] : o['text']))
-        }
-      , ch, ra, val, i
-
-    // don't serialize elements that are disabled or without a name
-    if (el.disabled || !n) return
-
-    switch (t) {
-    case 'input':
-      if (!/reset|button|image|file/i.test(el.type)) {
-        ch = /checkbox/i.test(el.type)
-        ra = /radio/i.test(el.type)
-        val = el.value
-        // WebKit gives us "" instead of "on" if a checkbox has no value, so correct it here
-        ;(!(ch || ra) || el.checked) && cb(n, normalize(ch && val === '' ? 'on' : val))
-      }
-      break
-    case 'textarea':
-      cb(n, normalize(el.value))
-      break
-    case 'select':
-      if (el.type.toLowerCase() === 'select-one') {
-        optCb(el.selectedIndex >= 0 ? el.options[el.selectedIndex] : null)
-      } else {
-        for (i = 0; el.length && i < el.length; i++) {
-          el.options[i].selected && optCb(el.options[i])
-        }
-      }
-      break
-    }
-  }
-
-  // collect up all form elements found from the passed argument elements all
-  // the way down to child elements; pass a '<form>' or form fields.
-  // called with 'this'=callback to use for serial() on each element
-  function eachFormElement() {
-    var cb = this
-      , e, i
-      , serializeSubtags = function (e, tags) {
-          var i, j, fa
-          for (i = 0; i < tags.length; i++) {
-            fa = e[byTag](tags[i])
-            for (j = 0; j < fa.length; j++) serial(fa[j], cb)
-          }
-        }
-
-    for (i = 0; i < arguments.length; i++) {
-      e = arguments[i]
-      if (/input|select|textarea/i.test(e.tagName)) serial(e, cb)
-      serializeSubtags(e, [ 'input', 'select', 'textarea' ])
-    }
-  }
-
-  // standard query string style serialization
-  function serializeQueryString() {
-    return reqwest.toQueryString(reqwest.serializeArray.apply(null, arguments))
-  }
-
-  // { 'name': 'value', ... } style serialization
-  function serializeHash() {
-    var hash = {}
-    eachFormElement.apply(function (name, value) {
-      if (name in hash) {
-        hash[name] && !isArray(hash[name]) && (hash[name] = [hash[name]])
-        hash[name].push(value)
-      } else hash[name] = value
-    }, arguments)
-    return hash
-  }
-
-  // [ { name: 'name', value: 'value' }, ... ] style serialization
-  reqwest.serializeArray = function () {
-    var arr = []
-    eachFormElement.apply(function (name, value) {
-      arr.push({name: name, value: value})
-    }, arguments)
-    return arr
-  }
-
-  reqwest.serialize = function () {
-    if (arguments.length === 0) return ''
-    var opt, fn
-      , args = Array.prototype.slice.call(arguments, 0)
-
-    opt = args.pop()
-    opt && opt.nodeType && args.push(opt) && (opt = null)
-    opt && (opt = opt.type)
-
-    if (opt == 'map') fn = serializeHash
-    else if (opt == 'array') fn = reqwest.serializeArray
-    else fn = serializeQueryString
-
-    return fn.apply(null, args)
-  }
-
-  reqwest.toQueryString = function (o, trad) {
-    var prefix, i
-      , traditional = trad || false
-      , s = []
-      , enc = encodeURIComponent
-      , add = function (key, value) {
-          // If value is a function, invoke it and return its value
-          value = ('function' === typeof value) ? value() : (value == null ? '' : value)
-          s[s.length] = enc(key) + '=' + enc(value)
-        }
-    // If an array was passed in, assume that it is an array of form elements.
-    if (isArray(o)) {
-      for (i = 0; o && i < o.length; i++) add(o[i]['name'], o[i]['value'])
-    } else {
-      // If traditional, encode the "old" way (the way 1.3.2 or older
-      // did it), otherwise encode params recursively.
-      for (prefix in o) {
-        if (o.hasOwnProperty(prefix)) buildParams(prefix, o[prefix], traditional, add)
-      }
-    }
-
-    // spaces should be + according to spec
-    return s.join('&').replace(/%20/g, '+')
-  }
-
-  function buildParams(prefix, obj, traditional, add) {
-    var name, i, v
-      , rbracket = /\[\]$/
-
-    if (isArray(obj)) {
-      // Serialize array item.
-      for (i = 0; obj && i < obj.length; i++) {
-        v = obj[i]
-        if (traditional || rbracket.test(prefix)) {
-          // Treat each array item as a scalar.
-          add(prefix, v)
-        } else {
-          buildParams(prefix + '[' + (typeof v === 'object' ? i : '') + ']', v, traditional, add)
-        }
-      }
-    } else if (obj && obj.toString() === '[object Object]') {
-      // Serialize object item.
-      for (name in obj) {
-        buildParams(prefix + '[' + name + ']', obj[name], traditional, add)
-      }
-
-    } else {
-      // Serialize scalar item.
-      add(prefix, obj)
-    }
-  }
-
-  reqwest.getcallbackPrefix = function () {
-    return callbackPrefix
-  }
-
-  // jQuery and Zepto compatibility, differences can be remapped here so you can call
-  // .ajax.compat(options, callback)
-  reqwest.compat = function (o, fn) {
-    if (o) {
-      o['type'] && (o['method'] = o['type']) && delete o['type']
-      o['dataType'] && (o['type'] = o['dataType'])
-      o['jsonpCallback'] && (o['jsonpCallbackName'] = o['jsonpCallback']) && delete o['jsonpCallback']
-      o['jsonp'] && (o['jsonpCallback'] = o['jsonp'])
-    }
-    return new Reqwest(o, fn)
-  }
-
-  reqwest.ajaxSetup = function (options) {
-    options = options || {}
-    for (var k in options) {
-      globalSetupOptions[k] = options[k]
-    }
-  }
-
-  return reqwest
-});
-
-},{"xhr2":2}]},{},[1])(1)
+  isSync = false
+}
+
+}).call(this,require('_process'))
+},{"_process":4}]},{},[1])(1)
 });

@@ -13,10 +13,12 @@
     "ol-popup": "^2.0.0",
     "openlayers": "4.0.1",
     "proj4": "^2.2.1",
-    "reqwest": "^2.0.5"
+    "run-parallel": "^1.1.6"
   },
   "devDependencies": {
     "browserify": "^14.4.0",
+    "semistandard": "^11.0.0",
+    "standard": "^10.0.3",
     "watchify": "^3.9.0"
   }
 }
