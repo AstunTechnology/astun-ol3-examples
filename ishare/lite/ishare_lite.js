@@ -562,7 +562,7 @@ var iShare = (function () {
         // Show wait cursor while we are requesting info
         evt.map.getViewport().classList.add('wait');
 
-        function displayInfoResults (error, infoLayers, featureCollections) {
+        function displayInfoResults (err, infoLayers, featureCollections) {
 
             /* jshint validthis: true */
 
@@ -594,7 +594,7 @@ var iShare = (function () {
         get: function (url, callback) {
             /**
             * Make a GET HTTP request
-            * The callback has signiture function (error, text, xhr)
+            * The callback has signiture function (err, text, xhr)
             */
             /* global XMLHttpRequest */
             var xhr = new XMLHttpRequest();
@@ -616,19 +616,19 @@ var iShare = (function () {
         getJson: function (url, callback) {
             /**
             * Make a GET HTTP request for a JSON document
-            * The callback has signiture function (error, json, xhr)
+            * The callback has signiture function (err, json, xhr)
             */
             return http.get(url, function (err, text, xhr) {
                 if (err) {
                     callback(err, null, xhr);
                     return;
                 }
+                var json = null;
                 try {
-                    var json = JSON.parse(text);
-                    callback(null, json, xhr);
+                    json = JSON.parse(text);
                 } catch (e) {
-                    callback(e, null, xhr);
                 }
+                callback(null, json, xhr);
             });
         }
     };
