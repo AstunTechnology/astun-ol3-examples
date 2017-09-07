@@ -2,6 +2,7 @@
 'use strict';
 
 var ol = require('openlayers');
+// TODO Create custom smaller proj4 build? See http://proj4js.org/
 var proj4 = require('proj4');
 ol.proj.setProj4(proj4);
 
@@ -36,7 +37,6 @@ var iShare = (function () {
         // TODO make loading a profile optional to allow users to create a
         // litemap then use loadProfile to load a custom profile
         LiteMap.getProfile(options.iShareUrl, options.profile, function (err, profile) {
-            console.log(profile);
 
             // If we've been passed options.view use it otherwise fallback to
             // the initialView
@@ -181,34 +181,42 @@ var iShare = (function () {
             };
         }
 
-        http.getJson(getProfileUrl('root'), function (err, rootProfile, xhr) {
-            // console.log(JSON.stringify(rootProfile));
+        var requests = {
+            'root': profileRequest('root', 'root'),
+            'profile': profileRequest('profile', profileName)
+        };
+
+        parallel(requests, function (err, results) {
+
+            var rootProfile = results['root'].profile;
+            var profileDef = results['profile'].profile;
 
             var requests = [];
 
-            requests = requests.concat(rootProfile.mapSources.map(function (profile) {
-                return profileRequest('profile', profile.mapName);
-            }));
-
-            requests = requests.concat(rootProfile.baseMapSources.map(function (profile) {
+            requests = requests.concat(rootProfile.baseMapSources.filter(function (baseMapDef) {
+                return profileDef.baseMaps.indexOf(baseMapDef.mapName) > -1;
+            }).map(function (profile) {
                 return profileRequest('basemap', profile.mapName);
             }));
 
             parallel(requests, function (err, results) {
 
-                var profiles = results.map(function (result) {
-                    result.profile.mapName = result.mapName;
-                    result.profile.type = result.type;
-                    return result.profile;
+                var baseMapDefs = results.map(function (result) {
+                    var baseMapDef = result.profile;
+                    return {
+                        mapName: result.mapName,
+                        displayName: rootProfile.baseMapSources.find(function (ms) {
+                            return ms.mapName === result.mapName;
+                        }).displayName,
+                        url: baseMapDef.baseMapDefinition.uri[0],
+                        layers: [baseMapDef.baseMapDefinition.name],
+                        format: baseMapDef.baseMapDefinition.options.format,
+                        resolutions: baseMapDef.baseMapDefinition.scales.map(scaleToResolution),
+                        attribution: baseMapDef.baseMapDefinition.copyright
+                    };
                 });
-                // console.log(profiles);
 
-                var profileDef = profiles.find(function (profile) {
-                    return profile.mapName === profileName;
-                });
-                // console.log(profileDef);
-
-                var baseMapDef = profiles.find(function (profile) {
+                var baseMapDef = baseMapDefs.find(function (profile) {
                     return profile.mapName === profileDef.defaultBaseMap;
                 });
 
@@ -231,31 +239,17 @@ var iShare = (function () {
                     return group;
                 });
 
-                var baseMaps = profiles.filter(function (profile) {
-                    return profile.type === 'basemap' && profileDef.baseMaps.indexOf(profile.mapName) > -1;
-                }).map(function (baseMapDef) {
-                    return {
-                        mapName: baseMapDef.mapName,
-                        displayName: rootProfile.baseMapSources.find(function (ms) {
-                            return ms.mapName === baseMapDef.mapName;
-                        }).displayName,
-                        url: baseMapDef.baseMapDefinition.uri[0],
-                        layers: [baseMapDef.baseMapDefinition.name],
-                        format: baseMapDef.baseMapDefinition.options.format
-                    };
-                });
-
                 var profile = {
                     defaultProfile: rootProfile.defaultMapSource,
                     defaultBaseMap: profileDef.defaultBaseMap,
                     profiles: rootProfile.mapSources,
-                    baseMaps: baseMaps,
+                    baseMaps: baseMapDefs,
                     extent: profileDef.bounds,
                     projection: profileDef.projection,
                     initialView: profileDef.initialView,
                     units: profileDef.units,
-                    resolutions: baseMapDef.baseMapDefinition.scales.map(scaleToResolution),
-                    attribution: baseMapDef.baseMapDefinition.copyright,
+                    resolutions: baseMapDef.resolutions,
+                    attribution: baseMapDef.attribution,
                     layerGroups: layerGroups,
                     overlays: {
                         wmsUrl: iShareUrl + 'getows.ashx?mapsource=' + profileName
@@ -624,12 +618,12 @@ var iShare = (function () {
                     callback(err, null, xhr);
                     return;
                 }
+                var json = null;
                 try {
-                    var json = JSON.parse(text);
-                    callback(null, json, xhr);
+                    json = JSON.parse(text);
                 } catch (e) {
-                    callback(e, null, xhr);
                 }
+                callback(null, json, xhr);
             });
         }
     };
